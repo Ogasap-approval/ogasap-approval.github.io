@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; manifest-src 'self'; connect-src 'self' https:; worker-src 'self'; frame-src 'self'; child-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f5f7f2">
+    <title>Approval</title>
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="icon" href="./src/assets/icon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="./src/styles.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand-mark" aria-hidden="true">A</div>
+      <div>
+        <h1>Approval <span class="route-badge">Prod</span></h1>
+        <p id="runtimeStatus" class="status-line">Starting</p>
+      </div>
+      <button id="settingsButton" type="button" class="icon-button" aria-label="Settings" aria-pressed="false" title="Settings">
+        <span aria-hidden="true">⚙</span>
+      </button>
+    </header>
+
+    <main>
+      <section id="settingsView" class="hidden" aria-labelledby="deviceTitle">
+        <div class="panel-heading">
+          <h2 id="deviceTitle">Device</h2>
+          <span id="deviceBadge" class="badge badge-muted">Not enrolled</span>
+        </div>
+        <dl class="metadata-list">
+          <div>
+            <dt>Approver</dt>
+            <dd id="approverValue">-</dd>
+          </div>
+          <div>
+            <dt>Device</dt>
+            <dd id="deviceValue">-</dd>
+          </div>
+          <div>
+            <dt>Share</dt>
+            <dd id="shareValue">-</dd>
+          </div>
+          <div>
+            <dt>Key</dt>
+            <dd id="keyValue">-</dd>
+          </div>
+          <div>
+            <dt>WebAuthn</dt>
+            <dd id="webauthnValue">-</dd>
+          </div>
+          <div>
+            <dt>App hash</dt>
+            <dd id="appHashValue" class="hash-value">Checking</dd>
+          </div>
+          <div>
+            <dt>Backend</dt>
+            <dd>
+              <input id="backendOriginInput" type="url" inputmode="url" autocomplete="off" placeholder="https://example.com">
+            </dd>
+          </div>
+        </dl>
+        <div class="button-row">
+          <button id="saveBackendButton" type="button" class="secondary">Save Backend</button>
+          <label class="file-button">
+            <span>Enroll Package</span>
+            <input id="enrollmentFile" type="file" accept="application/json,.json">
+          </label>
+          <button id="resetButton" type="button" class="secondary">Reset</button>
+        </div>
+      </section>
+
+      <section id="approvalView" class="kernel-frame-shell" aria-label="Payment approval">
+        <iframe
+          id="kernelFrame"
+          class="kernel-frame"
+          title="Payment approval"
+          allow="publickey-credentials-get *; publickey-credentials-create *"
+          referrerpolicy="no-referrer"
+        ></iframe>
+      </section>
+    </main>
+
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
