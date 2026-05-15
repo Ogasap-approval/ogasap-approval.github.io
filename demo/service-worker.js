@@ -2,34 +2,31 @@
 // changes. The fetch handler is strict cache-first, so without a fresh CACHE_NAME
 // installed clients keep serving the previously cached copy indefinitely.
 // Enforced by tools/check-service-worker-cache.mjs in CI.
-const CACHE_NAME = "approval-approve-prod-v18";
+const CACHE_NAME = "approval-approve-demo-pwa-v12";
 const PRECACHE_URLS = [
   "./",
   "./index.html",
-  "./kernel.html",
-  "./manifest-sha256.json",
   "./manifest.webmanifest",
   "./src/styles.css",
   "./src/api-client.js",
   "./src/app.js",
-  "./src/approval-kernel.js",
-  "./src/integrity.js",
-  "./src/kernel-frame.js",
-  "./src/payment-view.js",
-  "./src/sign-worker.js",
-  "./src/signing-session.js",
-  "./src/storage.js",
-  "./src/webauthn.js",
+  "./src/demo-fixtures.js",
   "./src/assets/icon.svg",
-  "./src/core/crypto/bigint.js",
-  "./src/core/crypto/bytes.js",
-  "./src/core/crypto/circl-keyshare.js",
-  "./src/core/crypto/circl-signshare.js",
-  "./src/core/crypto/pkcs1v15.js",
-  "./src/core/crypto/threshold-rsa.js",
-  "./src/core/protocol/canonical.js",
-  "./src/core/protocol/envelopes.js",
-  "./src/core/protocol/signing.js"
+  "./src/test-materials/test-phone-share-package.json",
+  "../prod/src/payment-view.js",
+  "../prod/src/sign-worker.js",
+  "../prod/src/signing-session.js",
+  "../prod/src/storage.js",
+  "../prod/src/webauthn.js",
+  "../prod/src/core/crypto/bigint.js",
+  "../prod/src/core/crypto/bytes.js",
+  "../prod/src/core/crypto/circl-keyshare.js",
+  "../prod/src/core/crypto/circl-signshare.js",
+  "../prod/src/core/crypto/pkcs1v15.js",
+  "../prod/src/core/crypto/threshold-rsa.js",
+  "../prod/src/core/protocol/canonical.js",
+  "../prod/src/core/protocol/envelopes.js",
+  "../prod/src/core/protocol/signing.js"
 ];
 
 self.addEventListener("install", (event) => {
@@ -51,12 +48,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
   const url = new URL(event.request.url);
-  if (
-    url.origin !== location.origin ||
-    url.pathname.startsWith("/api/") ||
-    url.pathname.startsWith("/demo/") ||
-    url.pathname.startsWith("/prod/")
-  ) {
+  if (url.origin !== location.origin || url.pathname.startsWith("/api/")) {
     return;
   }
 
