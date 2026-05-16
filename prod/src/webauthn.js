@@ -64,7 +64,8 @@ export async function createApprovalCredential({ approverId, deviceId }) {
       ],
       authenticatorSelection: {
         authenticatorAttachment: "platform",
-        residentKey: "preferred",
+        residentKey: "required",
+        requireResidentKey: true,
         userVerification: "required"
       },
       attestation: "none",

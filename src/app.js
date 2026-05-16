@@ -99,6 +99,14 @@ function prfErrorMessage(error) {
   return error?.name && error.name !== "Error" ? `${error.name}: ${message}` : message;
 }
 
+function isNoPrfKeyError(error) {
+  return /WebAuthn PRF returned no key/u.test(error?.message || String(error));
+}
+
+function prfReenrollMessage() {
+  return "Credential does not support WebAuthn PRF. Reset and re-enroll with a PRF-capable passkey provider.";
+}
+
 function initialPrfReason(credential) {
   if (credential.prf_creation_result_available) {
     return credential.prf_creation_error || "PRF result could not be used";
@@ -125,6 +133,9 @@ function prfStorageText() {
   }
   if (credential?.prf_enabled) {
     return "PRF active";
+  }
+  if (credential?.prf_needs_reenroll) {
+    return `Local AES, ${credential.prf_last_error || prfReenrollMessage()}`;
   }
   if (pkg && credential) {
     return credential.prf_last_error ? `Local AES, PRF unavailable: ${credential.prf_last_error}` : "Local AES, PRF not enabled";
@@ -604,7 +615,8 @@ function storableCredentialRecord(credential, prfWrap) {
     prf_enabled: Boolean(prfWrap),
     prf_salt_base64url: prfWrap?.saltBase64url ?? "",
     prf_last_checked_at: prfWrap ? new Date().toISOString() : "",
-    prf_last_error: prfWrap ? "" : initialPrfReason(credential)
+    prf_last_error: prfWrap ? "" : initialPrfReason(credential),
+    prf_needs_reenroll: false
   };
 }
 
@@ -691,11 +703,13 @@ async function enablePrfStorage() {
     sendKernelState();
     setStatus("Share storage upgraded to WebAuthn PRF");
   } catch (error) {
+    const needsReenroll = isNoPrfKeyError(error);
     state.webauthnCredential = {
       ...state.webauthnCredential,
       prf_enabled: false,
       prf_last_checked_at: new Date().toISOString(),
-      prf_last_error: prfErrorMessage(error)
+      prf_last_error: needsReenroll ? prfReenrollMessage() : prfErrorMessage(error),
+      prf_needs_reenroll: needsReenroll
     };
     await saveWebAuthnCredential(state.webauthnCredential);
     renderEnrollment();
