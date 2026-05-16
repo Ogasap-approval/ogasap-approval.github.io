@@ -8,7 +8,7 @@
     <title>Approval</title>
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" href="./src/assets/icon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="./src/styles.css?v=imported-rsa-v44">
+    <link rel="stylesheet" href="./src/styles.css?v=bundle-queue-v45">
   </head>
   <body>
     <header class="app-header">
@@ -138,6 +138,13 @@
       </section>
 
       <section id="approvalView" class="kernel-frame-shell" aria-label="Payment approval">
+        <div id="bundleQueue" class="bundle-queue hidden" aria-live="polite">
+          <div class="bundle-queue-summary">
+            <strong id="bundleQueueTitle">1 bundle pending</strong>
+            <span id="bundleQueueMeta" class="status-line">Select a bundle to review</span>
+          </div>
+          <div id="bundleTabs" class="bundle-tabs" role="tablist" aria-label="Pending bundles"></div>
+        </div>
         <div id="unlockGate" class="unlock-gate hidden" aria-labelledby="unlockGateTitle">
           <div class="unlock-content">
             <h2 id="unlockGateTitle">Unlock Share</h2>
@@ -165,6 +172,6 @@
       </div>
     </div>
 
-    <script type="module" src="./src/app.js?v=imported-rsa-v44"></script>
+    <script type="module" src="./src/app.js?v=bundle-queue-v45"></script>
   </body>
 </html>

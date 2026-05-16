@@ -203,7 +203,26 @@ async function authorizeEnrollmentReset() {
   });
 }
 
-function showView(view) {
+function routeFromLocation() {
+  const route = window.location.hash.slice(1);
+  return ["approval", "history", "settings"].includes(route) ? route : "approval";
+}
+
+function routeHash(view) {
+  return `#${view}`;
+}
+
+function setRoute(view, mode = "push") {
+  const nextState = { view };
+  const nextHash = routeHash(view);
+  if (mode === "replace") {
+    window.history.replaceState(nextState, "", nextHash);
+  } else if (window.history.state?.view !== view || window.location.hash !== nextHash) {
+    window.history.pushState(nextState, "", nextHash);
+  }
+}
+
+function showView(view, options = {}) {
   state.activeView = view;
   els.approvalView.classList.toggle("hidden", view !== "approval");
   els.historyView.classList.toggle("hidden", view !== "history");
@@ -215,10 +234,13 @@ function showView(view) {
   if (view === "history") {
     renderRecentApprovals();
   }
+  if (options.history === "push" || options.history === "replace") {
+    setRoute(view, options.history);
+  }
 }
 
 function toggleView(view) {
-  showView(state.activeView === view ? "approval" : view);
+  showView(state.activeView === view ? "approval" : view, { history: "push" });
 }
 
 function outputBundleContext(extra = {}) {
@@ -684,6 +706,7 @@ function signInWorker({ phoneSharePackage, paymentInputs }) {
 }
 
 async function init() {
+  window.addEventListener("popstate", () => showView(routeFromLocation()));
   els.historyButton.addEventListener("click", () => toggleView("history"));
   els.settingsButton.addEventListener("click", () => toggleView("settings"));
   els.enrollDemoButton.addEventListener("click", () => enrollDemoDevice().catch((error) => {
@@ -719,7 +742,7 @@ async function init() {
   renderBundle();
   renderRecentApprovals();
   setResult(null);
-  showView("approval");
+  showView(routeFromLocation(), { history: "replace" });
   if (persistent) {
     setStatus("Ready");
   } else {

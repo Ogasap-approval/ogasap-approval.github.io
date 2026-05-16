@@ -273,11 +273,76 @@ section {
 
 .kernel-frame-shell {
   position: relative;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   padding: 0;
   isolation: isolate;
   min-height: 0;
   height: 100%;
+}
+
+.bundle-queue {
+  display: grid;
+  gap: 8px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 12px;
+  background: #fbfdf9;
+}
+
+.bundle-queue-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.bundle-queue-summary strong,
+.bundle-queue-summary span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bundle-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.bundle-tab {
+  display: grid;
+  flex: 0 0 min(220px, 72vw);
+  gap: 2px;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #fff;
+  color: var(--text);
+  text-align: left;
+}
+
+.bundle-tab.selected {
+  border-color: var(--accent-strong);
+  background: #edf8f1;
+}
+
+.bundle-tab strong,
+.bundle-tab span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bundle-tab span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 500;
 }
 
 .unlock-gate {
@@ -300,6 +365,7 @@ section {
 
 .kernel-frame {
   display: block;
+  flex: 1 1 auto;
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -816,6 +882,16 @@ tr:last-child td {
     flex-direction: row;
     flex-wrap: nowrap;
     gap: 8px;
+  }
+
+  .bundle-queue {
+    padding: 8px 10px;
+  }
+
+  .bundle-queue-summary {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
   }
 
   .metadata-list {

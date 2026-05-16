@@ -23,7 +23,7 @@ import {
   randomPrfSaltBase64url,
   requestApprovalAssertion,
   requestPrfWrapKey
-} from "./webauthn.js?v=imported-rsa-v44";
+} from "./webauthn.js?v=bundle-queue-v45";
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
@@ -38,6 +38,10 @@ const ids = [
   "settingsView",
   "historyButton",
   "settingsButton",
+  "bundleQueue",
+  "bundleQueueTitle",
+  "bundleQueueMeta",
+  "bundleTabs",
   "kernelFrame",
   "historyShell",
   "unlockGate",
@@ -85,6 +89,8 @@ const state = {
   shareStorageRequiresPrfUnlock: false,
   prfWrapKey: null,
   prfSaltBase64url: "",
+  pendingBundles: [],
+  selectedBundleId: "",
   bundle: null,
   lastApprovalResult: null,
   recentApprovals: [],
@@ -200,6 +206,7 @@ function renderUnlockGate() {
   const locked = needsShareUnlock();
   els.unlockGate.classList.toggle("hidden", !locked);
   els.kernelFrame.classList.toggle("hidden", locked);
+  els.bundleQueue.classList.toggle("hidden", locked || state.pendingBundles.length <= 1);
   els.historyUnlockGate.classList.toggle("hidden", !locked);
   els.historyShell.classList.toggle("hidden", locked);
   queueAutoUnlock();
@@ -220,6 +227,8 @@ function lockPrfSession(message = "App locked") {
   if (state.backendOriginRequiresPrfUnlock) {
     state.backendOrigin = "";
   }
+  state.pendingBundles = [];
+  state.selectedBundleId = "";
   state.bundle = null;
   state.lastApprovalResult = null;
   state.recentApprovals = [];
@@ -227,6 +236,7 @@ function lockPrfSession(message = "App locked") {
   stopQrScanner();
   renderEnrollment();
   renderRecentApprovals();
+  renderBundleQueue();
   sendKernelState();
   setStatus(message, "warning");
   return true;
@@ -239,7 +249,26 @@ function handleAppHidden() {
   lockPrfSession("App locked");
 }
 
-function showView(view) {
+function routeFromLocation() {
+  const route = window.location.hash.slice(1);
+  return ["approval", "history", "settings"].includes(route) ? route : "approval";
+}
+
+function routeHash(view) {
+  return `#${view}`;
+}
+
+function setRoute(view, mode = "push") {
+  const nextState = { view };
+  const nextHash = routeHash(view);
+  if (mode === "replace") {
+    window.history.replaceState(nextState, "", nextHash);
+  } else if (window.history.state?.view !== view || window.location.hash !== nextHash) {
+    window.history.pushState(nextState, "", nextHash);
+  }
+}
+
+function showView(view, options = {}) {
   state.activeView = view;
   els.approvalView.classList.toggle("hidden", view !== "approval");
   els.historyView.classList.toggle("hidden", view !== "history");
@@ -252,10 +281,13 @@ function showView(view) {
     renderRecentApprovals();
   }
   renderUnlockGate();
+  if (options.history === "push" || options.history === "replace") {
+    setRoute(view, options.history);
+  }
 }
 
 function toggleView(view) {
-  showView(state.activeView === view ? "approval" : view);
+  showView(state.activeView === view ? "approval" : view, { history: "push" });
 }
 
 function kernelFrameUrl() {
@@ -376,6 +408,60 @@ function totalText(totals = []) {
 
 function shortBundleId(bundleId = "") {
   return bundleId.length > 18 ? `${bundleId.slice(0, 10)}...${bundleId.slice(-6)}` : bundleId;
+}
+
+function pendingBundleTotalText(bundle) {
+  return totalText(bundle?.totals ?? []) || "-";
+}
+
+function pendingBundleTitle(bundle, index) {
+  const count = bundle?.payment_inputs?.length ?? 0;
+  return `Bundle ${index + 1} · ${count} tx`;
+}
+
+function renderBundleQueue() {
+  const bundles = state.pendingBundles;
+  const multiple = bundles.length > 1 && !needsShareUnlock();
+  els.bundleQueue.classList.toggle("hidden", !multiple);
+  els.bundleTabs.replaceChildren();
+  if (!multiple) {
+    els.bundleQueueTitle.textContent = bundles.length === 1 ? "1 bundle pending" : "No bundles pending";
+    els.bundleQueueMeta.textContent = "";
+    return;
+  }
+
+  const selectedIndex = Math.max(0, bundles.findIndex((bundle) => bundle.bundle_id === state.selectedBundleId));
+  els.bundleQueueTitle.textContent = `${bundles.length} bundles pending`;
+  els.bundleQueueMeta.textContent = `Reviewing ${selectedIndex + 1} of ${bundles.length}`;
+
+  bundles.forEach((bundle, index) => {
+    const selected = bundle.bundle_id === state.selectedBundleId;
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.className = `bundle-tab${selected ? " selected" : ""}`;
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", String(selected));
+    tab.title = bundle.bundle_id;
+    tab.addEventListener("click", () => selectPendingBundle(bundle.bundle_id, { userSelected: true }));
+
+    const label = document.createElement("strong");
+    label.textContent = pendingBundleTitle(bundle, index);
+    const meta = document.createElement("span");
+    meta.textContent = `${pendingBundleTotalText(bundle)} · ${shortBundleId(bundle.bundle_id)}`;
+    tab.append(label, meta);
+    els.bundleTabs.append(tab);
+  });
+}
+
+function selectPendingBundle(bundleId, options = {}) {
+  const bundle = state.pendingBundles.find((item) => item.bundle_id === bundleId) ?? null;
+  state.selectedBundleId = bundle?.bundle_id ?? "";
+  state.bundle = bundle;
+  renderBundleQueue();
+  sendKernelState();
+  if (options.userSelected && bundle) {
+    setStatus(`Reviewing ${shortBundleId(bundle.bundle_id)}`);
+  }
 }
 
 function timeText(iso) {
@@ -562,7 +648,8 @@ function handleKernelMessage(event) {
   } else if (event.data.type === "approved") {
     state.approvedBundleIds.add(event.data.bundle_id);
     state.lastApprovalResult = event.data.result ?? null;
-    state.bundle = null;
+    state.pendingBundles = state.pendingBundles.filter((bundle) => bundle.bundle_id !== event.data.bundle_id);
+    selectPendingBundle(state.pendingBundles[0]?.bundle_id ?? "");
     sendKernelState();
     schedulePendingBundlePoll(1000);
   } else if (event.data.type === "error") {
@@ -1003,6 +1090,8 @@ async function resetEnrollment() {
   state.phoneSharePackage = null;
   state.webauthnCredential = null;
   state.backendOrigin = "";
+  state.pendingBundles = [];
+  state.selectedBundleId = "";
   state.bundle = null;
   state.lastApprovalResult = null;
   state.recentApprovals = [];
@@ -1016,6 +1105,7 @@ async function resetEnrollment() {
   stopQrScanner();
   renderEnrollment();
   renderRecentApprovals();
+  renderBundleQueue();
   sendKernelState();
   setStatus("Enrollment reset");
 }
@@ -1043,10 +1133,13 @@ async function pollPendingBundles() {
   }
   clearPollTimer();
   if (!state.phoneSharePackage) {
+    state.pendingBundles = [];
+    state.selectedBundleId = "";
     state.bundle = null;
     state.recentApprovals = [];
     state.selectedApprovalId = "";
     renderRecentApprovals();
+    renderBundleQueue();
     sendKernelState();
     if (needsShareUnlock()) {
       if (state.activeView !== "history") {
@@ -1059,10 +1152,13 @@ async function pollPendingBundles() {
     return;
   }
   if (!state.backendOrigin) {
+    state.pendingBundles = [];
+    state.selectedBundleId = "";
     state.bundle = null;
     state.recentApprovals = [];
     state.selectedApprovalId = "";
     renderRecentApprovals();
+    renderBundleQueue();
     sendKernelState();
     setStatus("Set backend URL in Settings to check approvals", "warning");
     return;
@@ -1084,20 +1180,25 @@ async function pollPendingBundles() {
     }
     state.recentApprovals = recentApprovals;
     renderRecentApprovals();
-    const nextBundle = bundles.find((bundle) => !state.approvedBundleIds.has(bundle.bundle_id));
+    const pendingBundles = bundles.filter((bundle) => !state.approvedBundleIds.has(bundle.bundle_id));
+    state.pendingBundles = pendingBundles;
+    const selectedStillPending = pendingBundles.some((bundle) => bundle.bundle_id === state.selectedBundleId);
+    const nextBundle = selectedStillPending
+      ? pendingBundles.find((bundle) => bundle.bundle_id === state.selectedBundleId)
+      : pendingBundles[0];
 
     if (!nextBundle) {
+      state.pendingBundles = [];
+      state.selectedBundleId = "";
       state.bundle = null;
+      renderBundleQueue();
       sendKernelState();
       setStatus("No pending approvals");
       return;
     }
 
-    if (state.bundle?.bundle_id !== nextBundle.bundle_id) {
-      state.bundle = nextBundle;
-      sendKernelState();
-    }
-    setStatus("Bundle ready for review");
+    selectPendingBundle(nextBundle.bundle_id);
+    setStatus(pendingBundles.length > 1 ? `${pendingBundles.length} bundles ready for review` : "Bundle ready for review");
   } catch (error) {
     setStatus(`Approval polling failed: ${error.message}`, "error");
   } finally {
@@ -1108,6 +1209,7 @@ async function pollPendingBundles() {
 
 async function init() {
   window.addEventListener("message", handleKernelMessage);
+  window.addEventListener("popstate", () => showView(routeFromLocation()));
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       handleAppHidden();
@@ -1185,7 +1287,7 @@ async function init() {
   renderEnrollment();
   renderRecentApprovals();
   sendKernelState();
-  showView("approval");
+  showView(routeFromLocation(), { history: "replace" });
   await pollPendingBundles();
 }
 
