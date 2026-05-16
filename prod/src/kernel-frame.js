@@ -20,6 +20,7 @@ const state = {
   backendOrigin: "",
   integrityManifest: null,
   bundle: null,
+  bundleError: "",
   lastApprovalResult: null,
   approvedBundleIds: new Set(),
   busy: false,
@@ -118,6 +119,15 @@ function renderBundle() {
   els.totalsStrip.replaceChildren();
   els.paymentRows.replaceChildren();
 
+  if (state.bundleError) {
+    els.bundleSummary.textContent = "Bundle rejected";
+    els.bundleCountValue.textContent = "-";
+    els.paymentRows.append(emptyRow(state.bundleError));
+    setButtonState();
+    reportHeight();
+    return;
+  }
+
   if (!bundle) {
     els.bundleSummary.textContent = "Nothing to approve";
     els.bundleCountValue.textContent = "-";
@@ -157,6 +167,7 @@ async function applyState(message) {
   if (message.bundle) {
     await validateBundleForApprovalV1(message.bundle);
   }
+  state.bundleError = "";
   state.bundle = message.bundle ?? null;
   setResult(state.lastApprovalResult);
   renderBundle();
@@ -249,6 +260,7 @@ window.addEventListener("message", (event) => {
   }
   if (event.data.type === "state") {
     applyState(event.data).catch((error) => {
+      state.bundleError = error.message;
       state.bundle = null;
       renderBundle();
       setStatus(`Approval bundle rejected: ${error.message}`, "error");

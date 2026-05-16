@@ -3,22 +3,51 @@ import { sha256Hex } from "../../prod/src/core/protocol/canonical.js";
 import { bundleCommitmentsForInputsV1 } from "../../prod/src/core/protocol/envelopes.js";
 
 function demoPaymentBody(index) {
-  const amountMinor = 125000 + index * 1375;
+  const amountMinor = 12500 + index * 137;
   return {
-    template_id: "DK_INSTANT_CREDIT_TRANSFER",
+    template_id: "SEPA_INSTANT_CREDIT_TRANSFER_FI",
+    amount: amountMinorToDecimal(amountMinor),
+    currency: "EUR",
+    end_to_end_id: `demo-${String(index).padStart(3, "0")}`,
+    external_id: `demo-local-${String(index).padStart(3, "0")}-${randomToken()}`.slice(0, 64),
     debtor: {
-      account_masked: "2030 **** **1234"
+      account: {
+        currency: "EUR",
+        type: "IBAN",
+        value: "FI4616603001014326"
+      },
+      own_reference: `Demo payout ${String(index).padStart(3, "0")}`
     },
     creditor: {
       name: `Demo Supplier ${String(index).padStart(3, "0")}`,
-      account: `2030${String(1000000000 + index).slice(1)}`
-    },
-    amount: {
-      minor: String(amountMinor),
-      currency: "DKK"
-    },
-    remittance_text: `Invoice ${2026000 + index}`
+      account: {
+        type: "IBAN",
+        value: "FI1350001520000081"
+      },
+      reference: {
+        value: "RF18539007547034",
+        type: "RF"
+      }
+    }
   };
+}
+
+function amountMinorToDecimal(amountMinor) {
+  const value = BigInt(amountMinor);
+  return `${value / 100n}.${(value % 100n).toString().padStart(2, "0")}`;
+}
+
+function hexToBase64(hex) {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  }
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
 }
 
 function randomToken() {
@@ -33,6 +62,7 @@ async function createDemoBankSigningInput(index) {
   const body = demoPaymentBody(index);
   const bodyBytes = utf8Encode(JSON.stringify(body));
   const bodySha256 = await sha256Hex(bodyBytes);
+  const bodyDigest = hexToBase64(bodySha256);
 
   return {
     version: "bank_signing_input_v1",
@@ -41,19 +71,20 @@ async function createDemoBankSigningInput(index) {
     path: "/corporate/premium/v2/payments",
     signed_headers: [
       { name: "(request-target)", value: "" },
-      { name: "x-bank-originating-host", value: "api.bankopenbanking.com" },
-      { name: "x-bank-originating-date", value: "Fri, 15 May 2026 10:00:00 GMT" },
-      { name: "digest", value: `SHA-256=${bodySha256}` }
+      { name: "x-bank-originating-host", value: "api.sandbox-payments.example" },
+      { name: "x-bank-originating-date", value: new Date().toUTCString() },
+      { name: "content-type", value: "application/json" },
+      { name: "digest", value: `SHA-256=${bodyDigest}` }
     ],
     body_base64url: bytesToBase64url(bodyBytes),
     body_sha256: bodySha256,
     visible_payment: {
       creditor_name: body.creditor.name,
-      creditor_account: body.creditor.account,
-      debtor_account_masked: body.debtor.account_masked,
-      amount_minor: body.amount.minor,
-      currency: body.amount.currency,
-      remittance_text: body.remittance_text
+      creditor_account: body.creditor.account.value,
+      debtor_account_masked: "FI46...4326",
+      amount_minor: String(12500 + index * 137),
+      currency: body.currency,
+      remittance_text: body.creditor.reference.value
     }
   };
 }

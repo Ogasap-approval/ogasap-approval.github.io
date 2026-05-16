@@ -14,12 +14,9 @@ const PRINTABLE_ASCII = /^[\x20-\x7e]*$/u;
 const NO_LINE_BREAKS = /^[^\r\n]*$/u;
 const MAX_BUNDLE_PAYMENTS = 200;
 const MAX_BODY_BASE64URL_LENGTH = 350000;
-const BANK_HEADER_ORDER = [
-  "(request-target)",
-  "x-bank-originating-host",
-  "x-bank-originating-date",
-  "digest"
-];
+const BANK_SIGNED_HEADER_COUNT = 5;
+const ORIGINATING_HOST_HEADER = /^x-[a-z0-9-]+-originating-host$/u;
+const ORIGINATING_DATE_HEADER = /^x-[a-z0-9-]+-originating-date$/u;
 
 function assertPattern(name, value, pattern) {
   if (typeof value !== "string" || !pattern.test(value)) {
@@ -57,6 +54,44 @@ function assertPrintableHeaderValue(name, value) {
 
 function sameJSON(a, b) {
   return stableStringify(a) === stableStringify(b);
+}
+
+function bytesToBase64(bytes) {
+  if (typeof btoa !== "function") {
+    return Buffer.from(bytes).toString("base64");
+  }
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function hexToBase64(hex) {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytesToBase64(bytes);
+}
+
+function decimalAmountToMinor(value) {
+  const text = String(value ?? "");
+  const match = /^([0-9]+)(?:\.([0-9]{1,2}))?$/u.exec(text);
+  if (!match) {
+    return "";
+  }
+  const [, whole, fractional = ""] = match;
+  return (BigInt(whole) * 100n + BigInt(fractional.padEnd(2, "0"))).toString();
+}
+
+function maskAccount(value) {
+  const text = String(value ?? "");
+  if (text.length <= 8) {
+    return text;
+  }
+  return `${text.slice(0, 4)}...${text.slice(-4)}`;
 }
 
 export async function canonicalBackendAuthEnvelopeV1(input, cryptoProvider = globalThis.crypto) {
@@ -192,26 +227,38 @@ function assertBankSigningInputShapeV1(input) {
 }
 
 function validateBankSignedHeadersV1(headers, bodySha256) {
-  if (!Array.isArray(headers) || headers.length !== BANK_HEADER_ORDER.length) {
-    throw new RangeError(`signed_headers must contain exactly ${BANK_HEADER_ORDER.length} headers`);
+  if (!Array.isArray(headers) || headers.length !== BANK_SIGNED_HEADER_COUNT) {
+    throw new RangeError(`signed_headers must contain exactly ${BANK_SIGNED_HEADER_COUNT} headers`);
   }
 
+  const expectedDigest = `SHA-256=${hexToBase64(bodySha256)}`;
   const seen = new Set();
   return headers.map((header, index) => {
-    const expectedName = BANK_HEADER_ORDER[index];
     if (!header || typeof header !== "object") {
       throw new RangeError("signed_headers entries must be objects");
     }
     const { name, value } = header;
-    if (name !== expectedName) {
-      throw new RangeError(`signed header ${index + 1} must be ${expectedName}`);
-    }
     if (seen.has(name)) {
       throw new RangeError(`duplicate signed header ${name}`);
     }
     seen.add(name);
     if (!PRINTABLE_ASCII.test(name)) {
       throw new RangeError("signed header names must be printable ASCII");
+    }
+    if (index === 0 && name !== "(request-target)") {
+      throw new RangeError("signed header 1 must be (request-target)");
+    }
+    if (index === 1 && !ORIGINATING_HOST_HEADER.test(name)) {
+      throw new RangeError("signed header 2 must be an originating host header");
+    }
+    if (index === 2 && !ORIGINATING_DATE_HEADER.test(name)) {
+      throw new RangeError("signed header 3 must be an originating date header");
+    }
+    if (index === 3 && name !== "content-type") {
+      throw new RangeError("signed header 4 must be content-type");
+    }
+    if (index === 4 && name !== "digest") {
+      throw new RangeError("signed header 5 must be digest");
     }
     if (name === "(request-target)") {
       if (value !== "") {
@@ -220,7 +267,10 @@ function validateBankSignedHeadersV1(headers, bodySha256) {
     } else {
       assertPrintableHeaderValue(`signed header ${name}`, value);
     }
-    if (name === "digest" && value !== `SHA-256=${bodySha256}`) {
+    if (name === "content-type" && value !== "application/json") {
+      throw new RangeError("content-type signed header must be application/json");
+    }
+    if (name === "digest" && value !== expectedDigest) {
       throw new RangeError("digest signed header must match body_sha256");
     }
     return { name, value };
@@ -280,11 +330,11 @@ export function deriveVisiblePaymentFromBankBodyV1(bodyBytes) {
 
   return normalizeVisiblePaymentV1({
     creditor_name: body.creditor?.name,
-    creditor_account: body.creditor?.account,
-    debtor_account_masked: body.debtor?.account_masked ?? "",
-    amount_minor: String(body.amount?.minor ?? ""),
-    currency: body.amount?.currency,
-    remittance_text: body.remittance_text ?? ""
+    creditor_account: body.creditor?.account?.value ?? body.creditor?.account,
+    debtor_account_masked: body.debtor?.account_masked ?? maskAccount(body.debtor?.account?.value),
+    amount_minor: body.amount?.minor !== undefined ? String(body.amount.minor) : decimalAmountToMinor(body.amount),
+    currency: body.amount?.currency ?? body.currency,
+    remittance_text: body.remittance_text ?? body.creditor?.reference?.value ?? body.end_to_end_id ?? ""
   });
 }
 
