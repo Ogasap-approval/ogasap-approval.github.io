@@ -67,7 +67,6 @@ input[type="url"] {
   flex: 0 0 auto;
   width: 42px;
   min-height: 42px;
-  margin-left: auto;
   padding: 0;
   border: 1px solid var(--line);
   background: #fff;
@@ -78,6 +77,23 @@ input[type="url"] {
 .icon-button.active {
   background: var(--accent-strong);
   color: #fff;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.header-button {
+  min-height: 42px;
+}
+
+.header-button.active {
+  border-color: var(--accent-strong);
+  background: #dff3e7;
+  color: var(--accent-strong);
 }
 
 .file-button {
@@ -168,8 +184,14 @@ section {
   min-width: 0;
 }
 
-#settingsView {
+#settingsView,
+#historyView {
   overflow: auto;
+}
+
+.history-view {
+  display: grid;
+  gap: 12px;
 }
 
 .kernel-frame-shell {
@@ -423,6 +445,10 @@ tr:last-child td {
   min-height: 0;
 }
 
+.history-panel {
+  margin-top: 0;
+}
+
 .activity-list {
   display: grid;
   gap: 8px;
@@ -435,9 +461,21 @@ tr:last-child td {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  width: 100%;
   border: 1px solid var(--line);
   border-radius: 8px;
+  background: #fff;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
   padding: 9px 10px;
+  text-align: left;
+}
+
+.activity-row:hover,
+.activity-row.selected {
+  border-color: #8cbf9e;
+  background: #f3faf5;
 }
 
 .activity-main {
@@ -481,6 +519,23 @@ tr:last-child td {
   padding: 10px;
   color: var(--muted);
   text-align: center;
+}
+
+.activity-detail {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.activity-detail-table-wrap {
+  max-height: 24dvh;
+  overflow: auto;
+}
+
+.compact-button {
+  min-height: 0;
+  padding: 6px 10px;
 }
 
 @media (max-width: 760px) {

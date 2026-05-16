@@ -5,11 +5,11 @@
   "files": [
     {
       "path": "index.html",
-      "sha256": "2371358db12d65707824c7eeac5b3ff2364bd3c0b7ebebfeee94d1a0daeea1d9"
+      "sha256": "530e7390f3e06f8524f9ee9af4e41e5d1900382bfc8523b590361bd790434dba"
     },
     {
       "path": "kernel.html",
-      "sha256": "55fb0d93158f030a4b5ab6e8fefa301851ef664e804a1a08663ff49d955613c7"
+      "sha256": "d738c393b4da04221b5aa048c1f02b8fed9841a39bb022a190054790d12db4e0"
     },
     {
       "path": "manifest.webmanifest",
@@ -17,7 +17,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "eff70203ef67cb4c5a494b35b5d677d9a18ee0c99fea10474ecc49822b4857a1"
+      "sha256": "739ba9a3e8519425e94b1d2b26871689b0d5561146bc2e6cff06e258782b5a1b"
     },
     {
       "path": "src/api-client.js",
@@ -25,7 +25,7 @@
     },
     {
       "path": "src/app.js",
-      "sha256": "46a9b320efa437dcad8996ff7ce617ccadede8c489b98040bb42d4025371347e"
+      "sha256": "c25666eaa560c971e50775067bf04d65da23c1dbde3563a9e1b910c9cad92990"
     },
     {
       "path": "src/approval-kernel.js",
@@ -77,7 +77,7 @@
     },
     {
       "path": "src/kernel-frame.js",
-      "sha256": "1a352b8c1220f392b43423ecc73f46095417e65a3821987b5407a788a247d148"
+      "sha256": "dc66ced31ccb45fb23fbbf729fb12cbdef4b3069cd149b7a4cdf2af579c23c11"
     },
     {
       "path": "src/payment-view.js",
@@ -97,7 +97,7 @@
     },
     {
       "path": "src/styles.css",
-      "sha256": "859d86a550a249d406fc818e8a0be16c481a6b2c6f19f7b676e929e7889f6413"
+      "sha256": "b64d3c63796cc8de70a002f70f7636ce4c7b013c5ae55ae0663a81028f477798"
     },
     {
       "path": "src/webauthn.js",

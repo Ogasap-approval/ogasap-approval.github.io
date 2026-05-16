@@ -61,7 +61,6 @@ main {
 }
 
 .icon-button {
-  margin-left: auto;
   display: grid;
   place-items: center;
   flex: 0 0 auto;
@@ -78,6 +77,23 @@ main {
   background: var(--ink);
   border-color: var(--ink);
   color: #fff;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.header-button {
+  min-height: 42px;
+}
+
+.header-button.active {
+  background: #e0f2fe;
+  border-color: #7dd3fc;
+  color: #075985;
 }
 
 .brand-mark {
@@ -129,7 +145,8 @@ h2 {
 }
 
 .approval-view,
-.settings-view {
+.settings-view,
+.history-view {
   width: min(680px, calc(100% - 24px));
   margin: 16px auto;
   max-height: calc(100dvh - 106px);
@@ -143,7 +160,8 @@ h2 {
   box-shadow: var(--shadow);
 }
 
-.settings-view {
+.settings-view,
+.history-view {
   padding: 18px;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -470,6 +488,10 @@ pre {
   flex: 0 0 auto;
 }
 
+.history-panel {
+  margin: 0;
+}
+
 .activity-list {
   display: grid;
   gap: 8px;
@@ -482,10 +504,21 @@ pre {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  width: 100%;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
   padding: 9px 10px;
+  text-align: left;
+}
+
+.activity-row:hover,
+.activity-row.selected {
+  border-color: #8cbf9e;
+  background: #f3faf5;
 }
 
 .activity-main {
@@ -529,6 +562,23 @@ pre {
   padding: 10px;
   color: var(--muted);
   text-align: center;
+}
+
+.activity-detail {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.activity-detail-table-wrap {
+  max-height: 22dvh;
+  overflow: auto;
+}
+
+.compact-button {
+  min-height: 0;
+  padding: 6px 10px;
 }
 
 .error {
@@ -578,7 +628,8 @@ pre {
 
 @media (max-width: 560px) {
   .approval-view,
-  .settings-view {
+  .settings-view,
+  .history-view {
     width: calc(100% - 20px);
     margin: 10px auto;
     max-height: calc(100dvh - 88px);

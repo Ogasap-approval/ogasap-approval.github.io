@@ -1,5 +1,6 @@
 import { fetchPendingBundles, fetchRecentApprovals } from "./api-client.js";
 import { loadIntegrityManifest } from "./integrity.js";
+import { amountMinorToDecimal } from "./payment-view.js";
 import {
   clearEnrollment,
   loadBackendOrigin,
@@ -13,10 +14,13 @@ import {
 import { createApprovalCredential, isWebAuthnAvailable, requestApprovalAssertion } from "./webauthn.js";
 
 const POLL_INTERVAL_MS = 3000;
+const RESET_CONFIRM_MS = 10000;
 const ids = [
   "runtimeStatus",
   "approvalView",
+  "historyView",
   "settingsView",
+  "historyButton",
   "settingsButton",
   "kernelFrame",
   "deviceBadge",
@@ -29,7 +33,14 @@ const ids = [
   "backendOriginInput",
   "saveBackendButton",
   "enrollmentFile",
-  "resetButton"
+  "resetButton",
+  "recentCount",
+  "recentApprovals",
+  "activityDetail",
+  "activityDetailTitle",
+  "activityDetailSummary",
+  "activityDetailRows",
+  "activityDetailClose"
 ];
 const els = Object.fromEntries(ids.map((id) => [id, document.querySelector(`#${id}`)]));
 const state = {
@@ -41,7 +52,11 @@ const state = {
   bundle: null,
   lastApprovalResult: null,
   recentApprovals: [],
+  selectedApprovalId: "",
   approvedBundleIds: new Set(),
+  activeView: "approval",
+  resetArmed: false,
+  resetTimer: 0,
   kernelReady: false,
   pollTimer: 0,
   pollInFlight: false
@@ -52,11 +67,22 @@ function setStatus(message, level = "normal") {
   els.runtimeStatus.className = level === "error" ? "status-line error" : level === "warning" ? "status-line warning" : "status-line";
 }
 
-function showSettings(show) {
-  els.settingsView.classList.toggle("hidden", !show);
-  els.approvalView.classList.toggle("hidden", show);
-  els.settingsButton.classList.toggle("active", show);
-  els.settingsButton.setAttribute("aria-pressed", String(show));
+function showView(view) {
+  state.activeView = view;
+  els.approvalView.classList.toggle("hidden", view !== "approval");
+  els.historyView.classList.toggle("hidden", view !== "history");
+  els.settingsView.classList.toggle("hidden", view !== "settings");
+  els.historyButton.classList.toggle("active", view === "history");
+  els.historyButton.setAttribute("aria-pressed", String(view === "history"));
+  els.settingsButton.classList.toggle("active", view === "settings");
+  els.settingsButton.setAttribute("aria-pressed", String(view === "settings"));
+  if (view === "history") {
+    renderRecentApprovals();
+  }
+}
+
+function toggleView(view) {
+  showView(state.activeView === view ? "approval" : view);
 }
 
 function kernelFrameUrl() {
@@ -108,6 +134,192 @@ async function authorizeBackendOriginChange(nextOrigin) {
   });
 }
 
+function clearResetArming() {
+  if (state.resetTimer) {
+    clearTimeout(state.resetTimer);
+    state.resetTimer = 0;
+  }
+  state.resetArmed = false;
+  els.resetButton.textContent = "Reset";
+}
+
+function armReset() {
+  state.resetArmed = true;
+  els.resetButton.textContent = "Confirm Reset";
+  setStatus("Click Confirm Reset to clear this device, then confirm with WebAuthn.", "warning");
+  if (state.resetTimer) {
+    clearTimeout(state.resetTimer);
+  }
+  state.resetTimer = setTimeout(() => {
+    clearResetArming();
+    setStatus("Reset cancelled");
+  }, RESET_CONFIRM_MS);
+}
+
+async function resetEnrollmentChallengeBytes() {
+  const context = [
+    "APPROVAL_ENROLLMENT_RESET_V1",
+    `page_origin:${window.location.origin}`,
+    `approver_id:${state.phoneSharePackage?.approver_id ?? "-"}`,
+    `device_id:${state.phoneSharePackage?.device_id ?? "-"}`,
+    `share_index:${state.phoneSharePackage?.share_index ?? "-"}`,
+    `key_id:${state.phoneSharePackage?.key_id ?? "-"}`,
+    `credential_id:${state.webauthnCredential?.credential_id ?? "-"}`
+  ].join("\n");
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${context}\n`)));
+}
+
+async function authorizeEnrollmentReset() {
+  if (!state.webauthnCredential) {
+    return;
+  }
+
+  const challengeBytes = await resetEnrollmentChallengeBytes();
+  setStatus("Confirm reset with WebAuthn");
+  await requestApprovalAssertion({
+    credentialId: state.webauthnCredential.credential_id,
+    challengeBytes
+  }).catch((error) => {
+    throw new Error(`Reset approval failed: ${error.message}`);
+  });
+}
+
+function totalText(totals = []) {
+  return totals.map((total) => amountMinorToDecimal(total.amount_minor, total.currency)).join(", ");
+}
+
+function shortBundleId(bundleId = "") {
+  return bundleId.length > 18 ? `${bundleId.slice(0, 10)}...${bundleId.slice(-6)}` : bundleId;
+}
+
+function timeText(iso) {
+  const time = Date.parse(iso);
+  if (!Number.isFinite(time)) {
+    return "-";
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(time));
+}
+
+function cell(text, className = "") {
+  const value = document.createElement("td");
+  value.textContent = text;
+  if (className) {
+    value.className = className;
+  }
+  return value;
+}
+
+function span(text, className = "") {
+  const value = document.createElement("span");
+  value.textContent = text;
+  if (className) {
+    value.className = className;
+  }
+  return value;
+}
+
+function emptyRow(text = "-") {
+  const row = document.createElement("tr");
+  const value = cell(text);
+  value.colSpan = 3;
+  value.className = "empty-state";
+  row.append(value);
+  return row;
+}
+
+function renderPaymentRows(target, payments) {
+  target.replaceChildren();
+  if (payments.length === 0) {
+    target.append(emptyRow("Payment details unavailable"));
+    return;
+  }
+
+  for (const payment of payments) {
+    const row = document.createElement("tr");
+    row.append(
+      cell(payment.creditor_account || "-"),
+      cell(payment.remittance_text || "-"),
+      cell(amountMinorToDecimal(payment.amount_minor ?? "0", payment.currency ?? ""), "numeric")
+    );
+    target.append(row);
+  }
+}
+
+function visiblePaymentsFromApproval(approval) {
+  if (!Array.isArray(approval?.visible_payments)) {
+    return [];
+  }
+  return approval.visible_payments.map((payment) => ({
+    creditor_account: payment?.creditor_account ?? "",
+    remittance_text: payment?.remittance_text ?? "",
+    amount_minor: payment?.amount_minor ?? "0",
+    currency: payment?.currency ?? ""
+  }));
+}
+
+function renderRecentApprovals() {
+  if (state.selectedApprovalId && !state.recentApprovals.some((approval) => approval.bundle_id === state.selectedApprovalId)) {
+    state.selectedApprovalId = "";
+  }
+
+  const approvals = state.recentApprovals.slice(0, 20);
+  els.recentCount.textContent = String(state.recentApprovals.length);
+  els.recentApprovals.replaceChildren();
+
+  if (approvals.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "activity-empty";
+    empty.textContent = "No approvals in the last 24 hours";
+    els.recentApprovals.append(empty);
+    renderActivityDetail();
+    return;
+  }
+
+  for (const approval of approvals) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = `activity-row${approval.bundle_id === state.selectedApprovalId ? " selected" : ""}`;
+    row.addEventListener("click", () => {
+      state.selectedApprovalId = approval.bundle_id;
+      renderRecentApprovals();
+    });
+
+    const main = document.createElement("div");
+    main.className = "activity-main";
+    const bundle = document.createElement("strong");
+    bundle.textContent = shortBundleId(approval.bundle_id);
+    const detail = document.createElement("span");
+    detail.textContent = `${approval.payment_count ?? "-"} transactions · ${totalText(approval.totals) || "-"}`;
+    main.append(bundle, detail);
+
+    const meta = document.createElement("div");
+    meta.className = "activity-meta";
+    meta.append(span(timeText(approval.received_at), "activity-time"), span("Approved", "activity-status"));
+    row.append(main, meta);
+    els.recentApprovals.append(row);
+  }
+  renderActivityDetail();
+}
+
+function renderActivityDetail() {
+  const approval = state.recentApprovals.find((item) => item.bundle_id === state.selectedApprovalId);
+  if (!approval) {
+    els.activityDetail.classList.add("hidden");
+    els.activityDetailTitle.textContent = "Bundle Details";
+    els.activityDetailSummary.textContent = "-";
+    els.activityDetailRows.replaceChildren(emptyRow());
+    return;
+  }
+
+  els.activityDetail.classList.remove("hidden");
+  els.activityDetailTitle.textContent = shortBundleId(approval.bundle_id);
+  els.activityDetailSummary.textContent = `${approval.payment_count ?? "-"} transactions · ${totalText(approval.totals) || "-"} · ${timeText(approval.received_at)}`;
+  renderPaymentRows(els.activityDetailRows, visiblePaymentsFromApproval(approval));
+}
+
 function sendKernelState() {
   if (!state.kernelReady || !els.kernelFrame.contentWindow) {
     return;
@@ -120,7 +332,6 @@ function sendKernelState() {
     backendOrigin: state.backendOrigin,
     bundle: state.bundle,
     lastApprovalResult: state.lastApprovalResult,
-    recentApprovals: state.recentApprovals,
     approvedBundleIds: [...state.approvedBundleIds]
   }, kernelTargetOrigin());
 }
@@ -215,12 +426,25 @@ async function enrollFromPackageFile(file) {
 }
 
 async function resetEnrollment() {
+  if (!state.resetArmed) {
+    armReset();
+    return;
+  }
+
+  clearResetArming();
+  await authorizeEnrollmentReset();
   clearPollTimer();
   await clearEnrollment();
   state.phoneSharePackage = null;
   state.webauthnCredential = null;
+  state.backendOrigin = "";
   state.bundle = null;
+  state.lastApprovalResult = null;
+  state.recentApprovals = [];
+  state.selectedApprovalId = "";
+  state.approvedBundleIds.clear();
   renderEnrollment();
+  renderRecentApprovals();
   sendKernelState();
   setStatus("Enrollment reset");
 }
@@ -250,6 +474,8 @@ async function pollPendingBundles() {
   if (!state.phoneSharePackage) {
     state.bundle = null;
     state.recentApprovals = [];
+    state.selectedApprovalId = "";
+    renderRecentApprovals();
     sendKernelState();
     setStatus("Enroll device in Settings to check approvals", "warning");
     return;
@@ -257,6 +483,8 @@ async function pollPendingBundles() {
   if (!state.backendOrigin) {
     state.bundle = null;
     state.recentApprovals = [];
+    state.selectedApprovalId = "";
+    renderRecentApprovals();
     sendKernelState();
     setStatus("Set backend URL in Settings to check approvals", "warning");
     return;
@@ -272,6 +500,7 @@ async function pollPendingBundles() {
       fetchRecentApprovals(state.phoneSharePackage, state.backendOrigin)
     ]);
     state.recentApprovals = recentApprovals;
+    renderRecentApprovals();
     const nextBundle = bundles.find((bundle) => !state.approvedBundleIds.has(bundle.bundle_id));
 
     if (!nextBundle) {
@@ -297,7 +526,8 @@ async function pollPendingBundles() {
 async function init() {
   window.addEventListener("message", handleKernelMessage);
   els.kernelFrame.src = kernelFrameUrl();
-  els.settingsButton.addEventListener("click", () => showSettings(els.settingsView.classList.contains("hidden")));
+  els.historyButton.addEventListener("click", () => toggleView("history"));
+  els.settingsButton.addEventListener("click", () => toggleView("settings"));
   els.enrollmentFile.addEventListener("change", () => enrollFromPackageFile(els.enrollmentFile.files[0]).catch((error) => {
     setStatus(error.message, "error");
   }));
@@ -307,6 +537,10 @@ async function init() {
   els.saveBackendButton.addEventListener("click", () => saveBackendFromSettings().catch((error) => {
     setStatus(error.message, "error");
   }));
+  els.activityDetailClose.addEventListener("click", () => {
+    state.selectedApprovalId = "";
+    renderRecentApprovals();
+  });
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./service-worker.js").catch(() => {});
@@ -322,8 +556,9 @@ async function init() {
   state.webauthnCredential = await loadWebAuthnCredential().catch(() => null);
   state.backendOrigin = await loadBackendOrigin().catch(() => "");
   renderEnrollment();
+  renderRecentApprovals();
   sendKernelState();
-  showSettings(false);
+  showView("approval");
   await pollPendingBundles();
 }
 

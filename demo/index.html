@@ -17,9 +17,12 @@
         <h1>Approval <span class="route-badge">Demo</span></h1>
         <p id="runtimeStatus" class="status-line">Starting</p>
       </div>
-      <button id="settingsButton" type="button" class="icon-button" aria-label="Settings" aria-pressed="false" title="Settings">
-        <span aria-hidden="true">⚙</span>
-      </button>
+      <div class="header-actions">
+        <button id="historyButton" type="button" class="secondary header-button" aria-pressed="false">History</button>
+        <button id="settingsButton" type="button" class="icon-button" aria-label="Settings" aria-pressed="false" title="Settings">
+          <span aria-hidden="true">⚙</span>
+        </button>
+      </div>
     </header>
 
     <main>
@@ -59,6 +62,39 @@
         <div class="button-row">
           <button id="enrollDemoButton" type="button">Enroll Test PKI</button>
           <button id="resetButton" type="button" class="secondary">Reset</button>
+        </div>
+      </section>
+
+      <section id="historyView" class="history-view hidden" aria-labelledby="historyTitle">
+        <div class="activity-panel history-panel" aria-labelledby="historyTitle">
+          <div class="panel-heading">
+            <h2 id="historyTitle">Approved Last 24h</h2>
+            <span id="recentCount" class="badge">0</span>
+          </div>
+          <div id="recentApprovals" class="activity-list" aria-live="polite"></div>
+          <div id="activityDetail" class="activity-detail hidden" aria-live="polite">
+            <div class="panel-heading">
+              <h2 id="activityDetailTitle">Bundle Details</h2>
+              <button id="activityDetailClose" type="button" class="secondary compact-button">Close</button>
+            </div>
+            <p id="activityDetailSummary" class="status-line">-</p>
+            <div class="table-wrap activity-detail-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Account</th>
+                    <th scope="col">Text</th>
+                    <th scope="col" class="numeric">Amount</th>
+                  </tr>
+                </thead>
+                <tbody id="activityDetailRows">
+                  <tr>
+                    <td colspan="3" class="empty-state">-</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -110,14 +146,6 @@
           <div id="resultPanel" class="result-panel hidden" aria-live="polite">
             <strong id="resultTitle">-</strong>
             <span id="resultDetail">-</span>
-          </div>
-
-          <div class="activity-panel" aria-labelledby="activityTitle">
-            <div class="panel-heading">
-              <h2 id="activityTitle">Approved Last 24h</h2>
-              <span id="recentCount" class="badge">0</span>
-            </div>
-            <div id="recentApprovals" class="activity-list" aria-live="polite"></div>
           </div>
 
           <div class="approval-output">

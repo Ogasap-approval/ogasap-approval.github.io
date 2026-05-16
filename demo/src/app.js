@@ -12,10 +12,14 @@ import {
 import { createApprovalCredential, isWebAuthnAvailable, requestApprovalAssertion } from "../../prod/src/webauthn.js";
 import { validateBundleForApprovalV1, webauthnApprovalChallengeV1 } from "../../prod/src/core/protocol/envelopes.js";
 
+const RESET_CONFIRM_MS = 10000;
+
 const els = {
   runtimeStatus: document.querySelector("#runtimeStatus"),
   approvalView: document.querySelector("#approvalView"),
+  historyView: document.querySelector("#historyView"),
   settingsView: document.querySelector("#settingsView"),
+  historyButton: document.querySelector("#historyButton"),
   settingsButton: document.querySelector("#settingsButton"),
   deviceBadge: document.querySelector("#deviceBadge"),
   approverValue: document.querySelector("#approverValue"),
@@ -39,6 +43,11 @@ const els = {
   resultDetail: document.querySelector("#resultDetail"),
   recentCount: document.querySelector("#recentCount"),
   recentApprovals: document.querySelector("#recentApprovals"),
+  activityDetail: document.querySelector("#activityDetail"),
+  activityDetailTitle: document.querySelector("#activityDetailTitle"),
+  activityDetailSummary: document.querySelector("#activityDetailSummary"),
+  activityDetailRows: document.querySelector("#activityDetailRows"),
+  activityDetailClose: document.querySelector("#activityDetailClose"),
   approvalOutput: document.querySelector("#approvalOutput")
 };
 
@@ -49,7 +58,11 @@ const state = {
   bundle: null,
   lastApprovalResult: null,
   recentApprovals: [],
+  selectedApprovalId: "",
   approvedBundleIds: new Set(),
+  activeView: "approval",
+  resetArmed: false,
+  resetTimer: 0,
   signatures: []
 };
 
@@ -129,11 +142,72 @@ function setResult(result) {
   els.resultDetail.textContent = result.detail ?? "";
 }
 
-function showSettings(show) {
-  els.settingsView.classList.toggle("hidden", !show);
-  els.approvalView.classList.toggle("hidden", show);
-  els.settingsButton.classList.toggle("active", show);
-  els.settingsButton.setAttribute("aria-pressed", String(show));
+function clearResetArming() {
+  if (state.resetTimer) {
+    clearTimeout(state.resetTimer);
+    state.resetTimer = 0;
+  }
+  state.resetArmed = false;
+  els.resetButton.textContent = "Reset";
+}
+
+function armReset() {
+  state.resetArmed = true;
+  els.resetButton.textContent = "Confirm Reset";
+  setStatus("Click Confirm Reset to clear this device, then confirm with WebAuthn.", "warning");
+  if (state.resetTimer) {
+    clearTimeout(state.resetTimer);
+  }
+  state.resetTimer = setTimeout(() => {
+    clearResetArming();
+    setStatus("Reset cancelled");
+  }, RESET_CONFIRM_MS);
+}
+
+async function resetEnrollmentChallengeBytes() {
+  const context = [
+    "APPROVAL_ENROLLMENT_RESET_V1",
+    `page_origin:${window.location.origin}`,
+    `approver_id:${state.phoneSharePackage?.approver_id ?? "-"}`,
+    `device_id:${state.phoneSharePackage?.device_id ?? "-"}`,
+    `share_index:${state.phoneSharePackage?.share_index ?? "-"}`,
+    `key_id:${state.phoneSharePackage?.key_id ?? "-"}`,
+    `credential_id:${state.webauthnCredential?.credential_id ?? "-"}`
+  ].join("\n");
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${context}\n`)));
+}
+
+async function authorizeEnrollmentReset() {
+  if (!state.webauthnCredential) {
+    return;
+  }
+
+  const challengeBytes = await resetEnrollmentChallengeBytes();
+  setStatus("Confirm reset with WebAuthn");
+  await requestApprovalAssertion({
+    credentialId: state.webauthnCredential.credential_id,
+    challengeBytes
+  }).catch((error) => {
+    throw new Error(`Reset approval failed: ${error.message}`);
+  });
+}
+
+function showView(view) {
+  state.activeView = view;
+  els.approvalView.classList.toggle("hidden", view !== "approval");
+  els.historyView.classList.toggle("hidden", view !== "history");
+  els.settingsView.classList.toggle("hidden", view !== "settings");
+  els.historyButton.classList.toggle("active", view === "history");
+  els.historyButton.setAttribute("aria-pressed", String(view === "history"));
+  els.settingsButton.classList.toggle("active", view === "settings");
+  els.settingsButton.setAttribute("aria-pressed", String(view === "settings"));
+  if (view === "history") {
+    renderRecentApprovals();
+  }
+}
+
+function toggleView(view) {
+  showView(state.activeView === view ? "approval" : view);
 }
 
 function outputBundleContext(extra = {}) {
@@ -213,6 +287,9 @@ function renderRecentApprovals() {
   state.recentApprovals = state.recentApprovals
     .filter((approval) => Date.parse(approval.received_at) >= cutoff)
     .sort((left, right) => Date.parse(right.received_at) - Date.parse(left.received_at));
+  if (state.selectedApprovalId && !state.recentApprovals.some((approval) => approval.bundle_id === state.selectedApprovalId)) {
+    state.selectedApprovalId = "";
+  }
   els.recentCount.textContent = String(state.recentApprovals.length);
   els.recentApprovals.replaceChildren();
 
@@ -221,12 +298,18 @@ function renderRecentApprovals() {
     empty.className = "activity-empty";
     empty.textContent = "No approvals in the last 24 hours";
     els.recentApprovals.append(empty);
+    renderActivityDetail();
     return;
   }
 
   for (const approval of state.recentApprovals.slice(0, 20)) {
-    const row = document.createElement("div");
-    row.className = "activity-row";
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = `activity-row${approval.bundle_id === state.selectedApprovalId ? " selected" : ""}`;
+    row.addEventListener("click", () => {
+      state.selectedApprovalId = approval.bundle_id;
+      renderRecentApprovals();
+    });
 
     const main = document.createElement("div");
     main.className = "activity-main";
@@ -243,6 +326,23 @@ function renderRecentApprovals() {
     row.append(main, meta);
     els.recentApprovals.append(row);
   }
+  renderActivityDetail();
+}
+
+function renderActivityDetail() {
+  const approval = state.recentApprovals.find((item) => item.bundle_id === state.selectedApprovalId);
+  if (!approval) {
+    els.activityDetail.classList.add("hidden");
+    els.activityDetailTitle.textContent = "Bundle Details";
+    els.activityDetailSummary.textContent = "-";
+    els.activityDetailRows.replaceChildren(emptyRow());
+    return;
+  }
+
+  els.activityDetail.classList.remove("hidden");
+  els.activityDetailTitle.textContent = shortBundleId(approval.bundle_id);
+  els.activityDetailSummary.textContent = `${approval.payment_count ?? "-"} transactions · ${totalText(approval.totals) || "-"} · ${timeText(approval.received_at)}`;
+  renderPaymentRows(els.activityDetailRows, visiblePaymentsFromApproval(approval), "Payment details unavailable");
 }
 
 function renderApprovalState() {
@@ -264,6 +364,50 @@ function emptyRow() {
   value.textContent = "-";
   row.append(value);
   return row;
+}
+
+function renderPaymentRows(target, payments, emptyText = "-") {
+  target.replaceChildren();
+  if (payments.length === 0) {
+    const row = emptyRow();
+    row.firstElementChild.textContent = emptyText;
+    target.append(row);
+    return;
+  }
+
+  for (const payment of payments) {
+    const row = document.createElement("tr");
+    row.append(
+      cell(payment.creditor_account || "-"),
+      cell(payment.remittance_text || "-"),
+      cell(amountMinorToDecimal(payment.amount_minor, payment.currency), "numeric")
+    );
+    target.append(row);
+  }
+}
+
+function visiblePaymentsFromBundle(bundle) {
+  return bundle.payment_inputs.map((input) => {
+    const payment = deriveVisiblePaymentFromInput(input);
+    return {
+      creditor_account: payment.creditor_account,
+      remittance_text: payment.remittance_text ?? "",
+      amount_minor: payment.amount_minor,
+      currency: payment.currency
+    };
+  });
+}
+
+function visiblePaymentsFromApproval(approval) {
+  if (!Array.isArray(approval?.visible_payments)) {
+    return [];
+  }
+  return approval.visible_payments.map((payment) => ({
+    creditor_account: payment?.creditor_account ?? "",
+    remittance_text: payment?.remittance_text ?? "",
+    amount_minor: payment?.amount_minor ?? "0",
+    currency: payment?.currency ?? ""
+  }));
 }
 
 function cell(text, className = "") {
@@ -315,6 +459,13 @@ async function enrollDemoDevice() {
 }
 
 async function resetDevice() {
+  if (!state.resetArmed) {
+    armReset();
+    return;
+  }
+
+  clearResetArming();
+  await authorizeEnrollmentReset();
   await clearEnrollment();
   state.phoneSharePackage = null;
   state.webauthnCredential = null;
@@ -420,6 +571,7 @@ async function approveBundle() {
     status: "approved",
     payment_count: state.bundle.payment_inputs.length,
     totals: state.bundle.totals,
+    visible_payments: visiblePaymentsFromBundle(state.bundle),
     received_at: backendResult.received_at ?? new Date().toISOString()
   };
   state.recentApprovals.unshift(activity);
@@ -490,7 +642,8 @@ function signInWorker({ phoneSharePackage, paymentInputs }) {
 }
 
 async function init() {
-  els.settingsButton.addEventListener("click", () => showSettings(els.settingsView.classList.contains("hidden")));
+  els.historyButton.addEventListener("click", () => toggleView("history"));
+  els.settingsButton.addEventListener("click", () => toggleView("settings"));
   els.enrollDemoButton.addEventListener("click", () => enrollDemoDevice().catch((error) => {
     setStatus(error.message, "error");
   }));
@@ -504,6 +657,10 @@ async function init() {
     setStatus(error.message, "error");
     renderApprovalState();
   }));
+  els.activityDetailClose.addEventListener("click", () => {
+    state.selectedApprovalId = "";
+    renderRecentApprovals();
+  });
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./service-worker.js").catch(() => {});
@@ -520,7 +677,7 @@ async function init() {
   renderBundle();
   renderRecentApprovals();
   setResult(null);
-  showSettings(false);
+  showView("approval");
   if (persistent) {
     setStatus("Ready");
   } else {

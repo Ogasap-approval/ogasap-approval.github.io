@@ -12,9 +12,7 @@ const ids = [
   "approveButton",
   "resultPanel",
   "resultTitle",
-  "resultDetail",
-  "recentCount",
-  "recentApprovals"
+  "resultDetail"
 ];
 const els = Object.fromEntries(ids.map((id) => [id, document.querySelector(`#${id}`)]));
 const state = {
@@ -24,7 +22,6 @@ const state = {
   integrityManifest: null,
   bundle: null,
   lastApprovalResult: null,
-  recentApprovals: [],
   approvedBundleIds: new Set(),
   busy: false
 };
@@ -45,21 +42,6 @@ function setStatus(message, level = "normal") {
 
 function totalText(totals = []) {
   return totals.map((total) => amountMinorToDecimal(total.amount_minor, total.currency)).join(", ");
-}
-
-function shortBundleId(bundleId = "") {
-  return bundleId.length > 18 ? `${bundleId.slice(0, 10)}...${bundleId.slice(-6)}` : bundleId;
-}
-
-function timeText(iso) {
-  const time = Date.parse(iso);
-  if (!Number.isFinite(time)) {
-    return "-";
-  }
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(new Date(time));
 }
 
 function setResult(result) {
@@ -112,6 +94,24 @@ function emptyRow(text = "-") {
   return row;
 }
 
+function appendPaymentRows(target, payments) {
+  target.replaceChildren();
+  if (payments.length === 0) {
+    target.append(emptyRow("Payment details unavailable"));
+    return;
+  }
+
+  for (const payment of payments) {
+    const row = document.createElement("tr");
+    row.append(
+      cell(payment.creditor_account || "-"),
+      cell(payment.remittance_text || "-"),
+      cell(amountMinorToDecimal(payment.amount_minor, payment.currency), "numeric")
+    );
+    target.append(row);
+  }
+}
+
 function renderBundle() {
   const { bundle } = state;
   els.totalsStrip.replaceChildren();
@@ -124,7 +124,6 @@ function renderBundle() {
     els.signProgress.max = 1;
     els.signProgress.value = 0;
     setButtonState();
-    renderRecentApprovals();
     reportHeight();
     return;
   }
@@ -138,55 +137,12 @@ function renderBundle() {
     els.totalsStrip.append(item);
   }
 
-  for (const input of bundle.payment_inputs) {
-    const payment = deriveVisiblePaymentFromInput(input);
-    const row = document.createElement("tr");
-    row.append(
-      cell(payment.creditor_account),
-      cell(payment.remittance_text || "-"),
-      cell(amountMinorToDecimal(payment.amount_minor, payment.currency), "numeric")
-    );
-    els.paymentRows.append(row);
-  }
+  appendPaymentRows(els.paymentRows, bundle.payment_inputs.map((input) => deriveVisiblePaymentFromInput(input)));
 
   els.signProgress.max = bundle.payment_inputs.length;
   els.signProgress.value = 0;
   setButtonState();
-  renderRecentApprovals();
   reportHeight();
-}
-
-function renderRecentApprovals() {
-  const approvals = state.recentApprovals.slice(0, 20);
-  els.recentCount.textContent = String(state.recentApprovals.length);
-  els.recentApprovals.replaceChildren();
-
-  if (approvals.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "activity-empty";
-    empty.textContent = "No approvals in the last 24 hours";
-    els.recentApprovals.append(empty);
-    return;
-  }
-
-  for (const approval of approvals) {
-    const row = document.createElement("div");
-    row.className = "activity-row";
-
-    const main = document.createElement("div");
-    main.className = "activity-main";
-    const bundle = document.createElement("strong");
-    bundle.textContent = shortBundleId(approval.bundle_id);
-    const detail = document.createElement("span");
-    detail.textContent = `${approval.payment_count ?? "-"} transactions · ${totalText(approval.totals) || "-"}`;
-    main.append(bundle, detail);
-
-    const meta = document.createElement("div");
-    meta.className = "activity-meta";
-    meta.append(span(timeText(approval.received_at), "activity-time"), span("Approved", "activity-status"));
-    row.append(main, meta);
-    els.recentApprovals.append(row);
-  }
 }
 
 async function applyState(message) {
@@ -194,7 +150,6 @@ async function applyState(message) {
   state.webauthnCredential = message.webauthnCredential ?? null;
   state.backendOrigin = message.backendOrigin ?? "";
   state.lastApprovalResult = message.lastApprovalResult ?? state.lastApprovalResult;
-  state.recentApprovals = Array.isArray(message.recentApprovals) ? message.recentApprovals : [];
   state.approvedBundleIds = new Set(message.approvedBundleIds ?? []);
 
   if (message.bundle) {
