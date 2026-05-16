@@ -9,7 +9,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "ff065e4b6354226a7abe97aa41bd757a8ea9d695a3967d08042990346f7ec1fb"
+      "sha256": "3d7d3d0f7368b227ea29e3a3c83017415f3057e7770487f688a3f6d9802967d0"
     },
     {
       "path": "kernel.html",
@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "17586f8446bb2ca0c88562de1ba141dfacc17abb0fb4e8ef73e2bf7e6780b580"
+      "sha256": "30de4cbb3f723adb008e467a6f53821be2ead0636911c604885edfdfee529862"
     },
     {
       "path": "src/api-client.js",
@@ -29,7 +29,7 @@
     },
     {
       "path": "src/app.js",
-      "sha256": "052c48d2e0bc8368c02654df6147454385d7204dbaa76389a37a6edc3190e788"
+      "sha256": "95dcc0c723fd94adf614678a3cbf511662aae2aa2fc3e44529fef93d947f399c"
     },
     {
       "path": "src/approval-kernel.js",

@@ -2,7 +2,7 @@
 // changes. The fetch handler is strict cache-first, so without a fresh CACHE_NAME
 // installed clients keep serving the previously cached copy indefinitely.
 // Enforced by tools/check-service-worker-cache.mjs in CI.
-const CACHE_NAME = "approval-approve-prod-v31";
+const CACHE_NAME = "approval-approve-prod-v32";
 const PRECACHE_URLS = [
   "./",
   "./index.html",
@@ -31,6 +31,10 @@ const PRECACHE_URLS = [
   "./src/core/protocol/envelopes.js",
   "./src/core/protocol/signing.js"
 ];
+const NETWORK_ONLY_PATHS = new Set([
+  "/force-update.html",
+  "/src/force-update.js"
+]);
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS)));
@@ -57,6 +61,11 @@ self.addEventListener("fetch", (event) => {
     url.pathname.startsWith("/demo/") ||
     url.pathname.startsWith("/prod/")
   ) {
+    return;
+  }
+
+  if (NETWORK_ONLY_PATHS.has(url.pathname) || url.searchParams.has("force_update")) {
+    event.respondWith(fetch(event.request));
     return;
   }
 
