@@ -107,6 +107,16 @@ function renderStorage() {
       : "Not persistent";
 }
 
+function initialPrfReason(credential) {
+  if (credential.prf_creation_result_available) {
+    return "PRF creation result ignored by demo";
+  }
+  if (credential.prf_creation_enabled) {
+    return "No PRF result returned at registration";
+  }
+  return "PRF extension not enabled at registration";
+}
+
 function writeOutput(value) {
   els.approvalOutput.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
 }
@@ -472,9 +482,14 @@ async function enrollDemoDevice() {
       credential_id: credential.credential_id,
       type: credential.type,
       created_at: credential.created_at,
+      resident_key: credential.resident_key === true,
+      webauthn_capabilities: credential.webauthn_capabilities ?? {},
       prf_creation_enabled: credential.prf_creation_enabled === true,
+      prf_creation_result_available: credential.prf_creation_result_available === true,
       prf_enabled: false,
-      prf_salt_base64url: ""
+      prf_salt_base64url: "",
+      prf_last_checked_at: "",
+      prf_last_error: initialPrfReason(credential)
     };
     await saveWebAuthnCredential(storedCredential);
     state.webauthnCredential = storedCredential;

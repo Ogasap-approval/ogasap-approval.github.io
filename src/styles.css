@@ -342,6 +342,13 @@ dd {
   font-weight: 700;
 }
 
+.inline-status {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .hash-value {
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
   font-size: 0.72rem;

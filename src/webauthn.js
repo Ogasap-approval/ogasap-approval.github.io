@@ -17,6 +17,17 @@ export function isWebAuthnAvailable() {
   return Boolean(window.PublicKeyCredential && navigator.credentials?.create && navigator.credentials?.get);
 }
 
+export async function webauthnClientCapabilities() {
+  if (typeof window.PublicKeyCredential?.getClientCapabilities !== "function") {
+    return {};
+  }
+  try {
+    return await window.PublicKeyCredential.getClientCapabilities();
+  } catch {
+    return {};
+  }
+}
+
 export function approvalRpId(hostname = window.location.hostname) {
   const normalized = hostname.toLowerCase();
   if (normalized.endsWith(GITHUB_PAGES_SUFFIX)) {
@@ -53,12 +64,13 @@ export async function createApprovalCredential({ approverId, deviceId }) {
       ],
       authenticatorSelection: {
         authenticatorAttachment: "platform",
-        residentKey: "discouraged",
+        residentKey: "preferred",
         userVerification: "required"
       },
       attestation: "none",
       timeout: 120000,
       extensions: {
+        credProps: true,
         prf: {
           eval: { first: prfCreationSalt }
         }
@@ -72,11 +84,15 @@ export async function createApprovalCredential({ approverId, deviceId }) {
 
   const extensionResults = credential.getClientExtensionResults?.() ?? {};
   const prfResult = extensionResults.prf?.results?.first;
+  const credProps = extensionResults.credProps ?? {};
   return {
     credential_id: bytesToBase64url(new Uint8Array(credential.rawId)),
     type: credential.type,
     created_at: new Date().toISOString(),
+    resident_key: credProps.rk === true,
+    webauthn_capabilities: await webauthnClientCapabilities(),
     prf_creation_enabled: extensionResults.prf?.enabled === true,
+    prf_creation_result_available: Boolean(prfResult),
     prf_creation_salt_base64url: prfResult ? bytesToBase64url(prfCreationSalt) : "",
     prf_creation_result_base64url: prfResult ? bytesToBase64url(new Uint8Array(prfResult)) : ""
   };
@@ -140,9 +156,9 @@ export async function requestPrfWrapKey({ credentialId, saltBase64url }) {
 
   const prfResult = credential?.getClientExtensionResults?.()?.prf?.results?.first;
   if (!prfResult) {
-    throw new Error("WebAuthn PRF is unavailable for this credential");
+    throw new Error("WebAuthn PRF returned no key for this credential");
   }
-  return derivePrfWrapKey(prfResult);
+  return derivePrfWrapKey(new Uint8Array(prfResult));
 }
 
 export async function requestApprovalAssertion({ credentialId, challengeBytes }) {

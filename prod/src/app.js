@@ -4,6 +4,7 @@ import { loadIntegrityManifest } from "./integrity.js";
 import { amountMinorToDecimal } from "./payment-view.js";
 import {
   clearEnrollment,
+  isStoragePersisted,
   loadBackendOrigin,
   loadPhoneSharePackage,
   loadPhoneSharePrfSalt,
@@ -40,10 +41,12 @@ const ids = [
   "shareValue",
   "keyValue",
   "webauthnValue",
+  "storageValue",
   "appHashValue",
   "backendOriginInput",
   "saveBackendButton",
   "unlockShareButton",
+  "enablePrfButton",
   "scanEnrollmentButton",
   "finishQrEnrollmentButton",
   "enrollmentFile",
@@ -65,6 +68,7 @@ const els = Object.fromEntries(ids.map((id) => [id, document.querySelector(`#${i
 const state = {
   phoneSharePackage: null,
   webauthnCredential: null,
+  storagePersistent: null,
   integrityManifest: null,
   integrityError: null,
   backendOrigin: "",
@@ -88,6 +92,50 @@ const state = {
 function setStatus(message, level = "normal") {
   els.runtimeStatus.textContent = message;
   els.runtimeStatus.className = level === "error" ? "status-line error" : level === "warning" ? "status-line warning" : "status-line";
+}
+
+function prfErrorMessage(error) {
+  const message = error?.message || String(error);
+  return error?.name && error.name !== "Error" ? `${error.name}: ${message}` : message;
+}
+
+function initialPrfReason(credential) {
+  if (credential.prf_creation_result_available) {
+    return credential.prf_creation_error || "PRF result could not be used";
+  }
+  if (credential.prf_creation_enabled) {
+    return "No PRF result returned at registration";
+  }
+  return "PRF extension not enabled at registration";
+}
+
+function storagePersistenceText() {
+  if (state.storagePersistent === null) {
+    return "Checking";
+  }
+  return state.storagePersistent ? "Persistent" : "Not persistent";
+}
+
+function prfStorageText() {
+  const pkg = state.phoneSharePackage;
+  const credential = state.webauthnCredential;
+  const locked = Boolean(credential && state.shareStorageRequiresPrfUnlock && !pkg);
+  if (locked) {
+    return "PRF active, locked";
+  }
+  if (credential?.prf_enabled) {
+    return "PRF active";
+  }
+  if (pkg && credential) {
+    return credential.prf_last_error ? `Local AES, PRF unavailable: ${credential.prf_last_error}` : "Local AES, PRF not enabled";
+  }
+  return "No share";
+}
+
+function renderStorage() {
+  const text = `${storagePersistenceText()} · ${prfStorageText()}`;
+  els.storageValue.textContent = text;
+  els.storageValue.title = text;
 }
 
 function showView(view) {
@@ -430,6 +478,14 @@ function renderQrEnrollment() {
   els.finishQrEnrollmentButton.classList.toggle("hidden", !state.pendingQrPackage);
 }
 
+function canEnablePrfStorage() {
+  return Boolean(
+    state.webauthnCredential &&
+    !state.webauthnCredential.prf_enabled &&
+    !state.shareStorageRequiresPrfUnlock
+  );
+}
+
 function renderEnrollment() {
   const pkg = state.phoneSharePackage;
   const credential = state.webauthnCredential;
@@ -442,8 +498,10 @@ function renderEnrollment() {
   els.shareValue.textContent = pkg ? `${pkg.share_index} of ${pkg.players}, threshold ${pkg.threshold}` : locked ? "Locked by WebAuthn PRF" : "-";
   els.keyValue.textContent = pkg?.key_id ?? "-";
   els.webauthnValue.textContent = credential ? credential.prf_enabled ? "Registered + PRF" : "Registered" : "-";
+  renderStorage();
   els.backendOriginInput.value = state.backendOrigin;
   els.unlockShareButton.classList.toggle("hidden", !locked);
+  els.enablePrfButton.classList.toggle("hidden", !canEnablePrfStorage());
   renderIntegrity();
   renderQrEnrollment();
   sendKernelState();
@@ -530,7 +588,7 @@ async function enrollFromPackage(pkg) {
   state.pendingQrPackage = null;
   renderEnrollment();
   sendKernelState();
-  setStatus(prfWrap ? "Device enrolled with WebAuthn PRF storage" : "Device enrolled without WebAuthn PRF storage", prfWrap ? "normal" : "warning");
+  setStatus(prfWrap ? "Device enrolled with WebAuthn PRF storage" : "Device enrolled. Tap Enable PRF in Settings to test PRF storage.", prfWrap ? "normal" : "warning");
   pollPendingBundles();
 }
 
@@ -539,14 +597,22 @@ function storableCredentialRecord(credential, prfWrap) {
     credential_id: credential.credential_id,
     type: credential.type,
     created_at: credential.created_at,
+    resident_key: credential.resident_key === true,
+    webauthn_capabilities: credential.webauthn_capabilities ?? {},
     prf_creation_enabled: credential.prf_creation_enabled === true,
+    prf_creation_result_available: credential.prf_creation_result_available === true,
     prf_enabled: Boolean(prfWrap),
-    prf_salt_base64url: prfWrap?.saltBase64url ?? ""
+    prf_salt_base64url: prfWrap?.saltBase64url ?? "",
+    prf_last_checked_at: prfWrap ? new Date().toISOString() : "",
+    prf_last_error: prfWrap ? "" : initialPrfReason(credential)
   };
 }
 
 async function createPrfStorageWrap(credential) {
-  const creationWrapKey = await prfWrapKeyFromCreationResult(credential).catch(() => null);
+  const creationWrapKey = await prfWrapKeyFromCreationResult(credential).catch((error) => {
+    credential.prf_creation_error = prfErrorMessage(error);
+    return null;
+  });
   if (creationWrapKey && credential.prf_creation_salt_base64url) {
     return {
       wrapKey: creationWrapKey,
@@ -554,14 +620,7 @@ async function createPrfStorageWrap(credential) {
     };
   }
 
-  const saltBase64url = randomPrfSaltBase64url();
-  setStatus("Confirm PRF storage with WebAuthn");
-  const wrapKey = await requestPrfWrapKey({
-    credentialId: credential.credential_id,
-    saltBase64url
-  }).catch(() => null);
-
-  return wrapKey ? { wrapKey, saltBase64url } : null;
+  return null;
 }
 
 async function unlockPrfShare() {
@@ -582,10 +641,66 @@ async function unlockPrfShare() {
   if (!state.phoneSharePackage) {
     throw new Error("Share unlock failed");
   }
+  state.shareStorageRequiresPrfUnlock = true;
+  if (!state.webauthnCredential.prf_enabled) {
+    state.webauthnCredential = {
+      ...state.webauthnCredential,
+      prf_enabled: true,
+      prf_salt_base64url: saltBase64url,
+      prf_last_checked_at: new Date().toISOString(),
+      prf_last_error: ""
+    };
+    await saveWebAuthnCredential(state.webauthnCredential);
+  }
   renderEnrollment();
   sendKernelState();
   setStatus("Share unlocked");
   pollPendingBundles();
+}
+
+async function enablePrfStorage() {
+  if (!state.phoneSharePackage || !state.webauthnCredential) {
+    throw new Error("Enroll device before enabling PRF storage");
+  }
+  if (state.webauthnCredential.prf_enabled) {
+    setStatus("PRF storage is already active");
+    return;
+  }
+
+  const saltBase64url = randomPrfSaltBase64url();
+  setStatus("Confirm PRF storage with WebAuthn");
+  try {
+    const prfWrapKey = await requestPrfWrapKey({
+      credentialId: state.webauthnCredential.credential_id,
+      saltBase64url
+    });
+    await savePhoneSharePackage(state.phoneSharePackage, {
+      prfWrapKey,
+      prfSaltBase64url: saltBase64url
+    });
+    state.webauthnCredential = {
+      ...state.webauthnCredential,
+      prf_enabled: true,
+      prf_salt_base64url: saltBase64url,
+      prf_last_checked_at: new Date().toISOString(),
+      prf_last_error: ""
+    };
+    await saveWebAuthnCredential(state.webauthnCredential);
+    state.shareStorageRequiresPrfUnlock = true;
+    renderEnrollment();
+    sendKernelState();
+    setStatus("Share storage upgraded to WebAuthn PRF");
+  } catch (error) {
+    state.webauthnCredential = {
+      ...state.webauthnCredential,
+      prf_enabled: false,
+      prf_last_checked_at: new Date().toISOString(),
+      prf_last_error: prfErrorMessage(error)
+    };
+    await saveWebAuthnCredential(state.webauthnCredential);
+    renderEnrollment();
+    throw new Error(`PRF unavailable: ${state.webauthnCredential.prf_last_error}`);
+  }
 }
 
 async function saveBackendFromSettings() {
@@ -807,6 +922,9 @@ async function init() {
   els.unlockShareButton.addEventListener("click", () => unlockPrfShare().catch((error) => {
     setStatus(error.message, "error");
   }));
+  els.enablePrfButton.addEventListener("click", () => enablePrfStorage().catch((error) => {
+    setStatus(error.message, "error");
+  }));
   els.resetButton.addEventListener("click", () => resetEnrollment().catch((error) => {
     setStatus(error.message, "error");
   }));
@@ -822,7 +940,11 @@ async function init() {
     navigator.serviceWorker.register("./service-worker.js").catch(() => {});
   }
 
-  await requestPersistentStorage().catch(() => false);
+  let persistent = await isStoragePersisted().catch(() => false);
+  if (!persistent) {
+    persistent = await requestPersistentStorage().catch(() => false);
+  }
+  state.storagePersistent = persistent;
 
   state.integrityManifest = await loadIntegrityManifest().catch((error) => {
     state.integrityError = error;
