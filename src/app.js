@@ -23,7 +23,7 @@ import {
   randomPrfSaltBase64url,
   requestApprovalAssertion,
   requestPrfWrapKey
-} from "./webauthn.js?v=header-status-v41";
+} from "./webauthn.js?v=stay-locked-v42";
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
@@ -802,7 +802,7 @@ async function unlockFromLockedView() {
     showView(targetView);
   } catch (error) {
     setStatus(`Unlock failed: ${error.message}`, "error");
-    showView("settings");
+    showView(targetView);
   }
 }
 
