@@ -9,7 +9,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "3d7d3d0f7368b227ea29e3a3c83017415f3057e7770487f688a3f6d9802967d0"
+      "sha256": "49501ea2962332f6bd37085e92b2c401b3a0df44c931c681a323d80797a7ec62"
     },
     {
       "path": "kernel.html",
@@ -29,7 +29,7 @@
     },
     {
       "path": "src/app.js",
-      "sha256": "84e061f4c4539a33f5894e4b70759445d78b0e396eace8f6296cf5132c8d71fc"
+      "sha256": "5f70a90032c09d5c933b8f89f1eecd946be9100c3756a4ead543691480a764f4"
     },
     {
       "path": "src/approval-kernel.js",
