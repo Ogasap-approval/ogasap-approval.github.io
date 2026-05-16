@@ -23,7 +23,7 @@ import {
   randomPrfSaltBase64url,
   requestApprovalAssertion,
   requestPrfWrapKey
-} from "./webauthn.js?v=locked-history-v36";
+} from "./webauthn.js?v=auto-lock-v38";
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
@@ -130,6 +130,18 @@ function needsShareUnlock() {
   return Boolean(state.webauthnCredential && state.shareStorageRequiresPrfUnlock && !state.phoneSharePackage);
 }
 
+function publicCredentialForLockedState() {
+  if (!state.webauthnCredential?.credential_id) {
+    return null;
+  }
+  return {
+    credential_id: state.webauthnCredential.credential_id,
+    type: state.webauthnCredential.type ?? "public-key",
+    prf_enabled: state.webauthnCredential.prf_enabled === true,
+    prf_salt_base64url: state.webauthnCredential.prf_salt_base64url ?? ""
+  };
+}
+
 function storagePersistenceText() {
   if (state.storagePersistent === null) {
     return "Checking";
@@ -168,6 +180,38 @@ function renderUnlockGate() {
   els.kernelFrame.classList.toggle("hidden", locked);
   els.historyUnlockGate.classList.toggle("hidden", !locked);
   els.historyShell.classList.toggle("hidden", locked);
+}
+
+function lockPrfSession(message = "App locked") {
+  if (!state.shareStorageRequiresPrfUnlock || !state.phoneSharePackage) {
+    return false;
+  }
+
+  clearPollTimer();
+  state.phoneSharePackage = null;
+  state.webauthnCredential = publicCredentialForLockedState();
+  state.prfWrapKey = null;
+  state.prfSaltBase64url = "";
+  if (state.backendOriginRequiresPrfUnlock) {
+    state.backendOrigin = "";
+  }
+  state.bundle = null;
+  state.lastApprovalResult = null;
+  state.recentApprovals = [];
+  state.selectedApprovalId = "";
+  stopQrScanner();
+  renderEnrollment();
+  renderRecentApprovals();
+  sendKernelState();
+  setStatus(message, "warning");
+  return true;
+}
+
+function handleAppHidden() {
+  if (state.qrStream) {
+    stopQrScanner();
+  }
+  lockPrfSession("App locked");
 }
 
 function showView(view) {
@@ -970,14 +1014,19 @@ async function pollPendingBundles() {
   }
 
   state.pollInFlight = true;
+  const pollShare = state.phoneSharePackage;
+  const pollBackendOrigin = state.backendOrigin;
   try {
     if (!state.bundle) {
       setStatus("Checking for approvals");
     }
     const [bundles, recentApprovals] = await Promise.all([
-      fetchPendingBundles(state.phoneSharePackage, state.backendOrigin),
-      fetchRecentApprovals(state.phoneSharePackage, state.backendOrigin)
+      fetchPendingBundles(pollShare, pollBackendOrigin),
+      fetchRecentApprovals(pollShare, pollBackendOrigin)
     ]);
+    if (state.phoneSharePackage !== pollShare || state.backendOrigin !== pollBackendOrigin) {
+      return;
+    }
     state.recentApprovals = recentApprovals;
     renderRecentApprovals();
     const nextBundle = bundles.find((bundle) => !state.approvedBundleIds.has(bundle.bundle_id));
@@ -1004,6 +1053,12 @@ async function pollPendingBundles() {
 
 async function init() {
   window.addEventListener("message", handleKernelMessage);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      handleAppHidden();
+    }
+  });
+  window.addEventListener("pagehide", handleAppHidden);
   els.kernelFrame.src = kernelFrameUrl();
   els.historyButton.addEventListener("click", () => toggleView("history"));
   els.settingsButton.addEventListener("click", () => toggleView("settings"));

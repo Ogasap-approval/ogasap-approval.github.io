@@ -58,11 +58,18 @@ export async function approveReviewedBundle({
   backendOrigin,
   bundle,
   integrityManifest,
+  signal,
+  isCancelled = () => false,
   onStatus = () => {}
 }) {
   if (!phoneSharePackage || !webauthnCredential || !backendOrigin || !bundle) {
     throw new Error("approval kernel requires enrollment and a bundle");
   }
+  const assertActive = () => {
+    if (signal?.aborted || isCancelled()) {
+      throw new Error("Approval cancelled by app lock");
+    }
+  };
 
   await validateBundleForApprovalV1(bundle);
   const metadata = approvalMetadata({ bundle, phoneSharePackage, webauthnCredential });
@@ -71,6 +78,7 @@ export async function approveReviewedBundle({
     credentialId: webauthnCredential.credential_id,
     challengeBytes: await webauthnApprovalChallengeV1(metadata)
   });
+  assertActive();
 
   onStatus("Signing payment inputs");
   const signatures = await signInVerifiedWorker({
@@ -78,6 +86,7 @@ export async function approveReviewedBundle({
     phoneSharePackage,
     paymentInputs: bundle.payment_inputs
   });
+  assertActive();
 
   return submitBundleApproval({
     version: "bundle_approval_v1",
@@ -88,5 +97,5 @@ export async function approveReviewedBundle({
     webauthn_assertion: assertion,
     phone_sign_shares: signatures.map((signature) => signature.sign_share_base64url),
     approved_at: new Date().toISOString()
-  }, phoneSharePackage, backendOrigin);
+  }, phoneSharePackage, backendOrigin, { signal });
 }

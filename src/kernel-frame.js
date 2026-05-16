@@ -22,7 +22,9 @@ const state = {
   bundle: null,
   lastApprovalResult: null,
   approvedBundleIds: new Set(),
-  busy: false
+  busy: false,
+  lockEpoch: 0,
+  approvalAbortController: null
 };
 
 function post(type, fields = {}) {
@@ -141,7 +143,12 @@ function renderBundle() {
 }
 
 async function applyState(message) {
-  state.phoneSharePackage = message.phoneSharePackage ?? null;
+  const nextPhoneSharePackage = message.phoneSharePackage ?? null;
+  if (state.phoneSharePackage && !nextPhoneSharePackage) {
+    state.lockEpoch += 1;
+    state.approvalAbortController?.abort();
+  }
+  state.phoneSharePackage = nextPhoneSharePackage;
   state.webauthnCredential = message.webauthnCredential ?? null;
   state.backendOrigin = message.backendOrigin ?? "";
   state.lastApprovalResult = message.lastApprovalResult ?? state.lastApprovalResult;
@@ -161,6 +168,9 @@ async function approveBundle() {
   }
 
   state.busy = true;
+  const lockEpoch = state.lockEpoch;
+  const approvalAbortController = new AbortController();
+  state.approvalAbortController = approvalAbortController;
   setButtonState();
   setResult("-");
 
@@ -171,6 +181,8 @@ async function approveBundle() {
       backendOrigin: state.backendOrigin,
       bundle: state.bundle,
       integrityManifest: state.integrityManifest,
+      signal: approvalAbortController.signal,
+      isCancelled: () => lockEpoch !== state.lockEpoch || !state.phoneSharePackage,
       onStatus: setStatus
     });
     const approvalDetail = totalText(state.bundle.totals) || result?.bundle_id || state.bundle.bundle_id;
@@ -188,6 +200,11 @@ async function approveBundle() {
       result: approvalResult
     });
   } catch (error) {
+    if (error.message === "Approval cancelled by app lock" || error.name === "AbortError") {
+      setResult(null);
+      setStatus("Approval cancelled by app lock", "warning");
+      return;
+    }
     if (error.status === 409 || error.code === "bundle_already_approved") {
       const alreadyResult = {
         status: "warning",
@@ -217,6 +234,9 @@ async function approveBundle() {
       result: failedResult
     });
   } finally {
+    if (state.approvalAbortController === approvalAbortController) {
+      state.approvalAbortController = null;
+    }
     state.busy = false;
     setButtonState();
     reportHeight();

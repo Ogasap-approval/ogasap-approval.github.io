@@ -304,7 +304,7 @@ export async function fetchRecentApprovals(phoneSharePackage, backendOrigin) {
   }));
 }
 
-export async function submitBundleApproval(approval, phoneSharePackage, backendOrigin) {
+export async function submitBundleApproval(approval, phoneSharePackage, backendOrigin, { signal } = {}) {
   const body = JSON.stringify(approval);
   const bodyBytes = utf8Encode(body);
   const auth = await signedApprovalHeaders({
@@ -320,7 +320,8 @@ export async function submitBundleApproval(approval, phoneSharePackage, backendO
       ...auth.headers,
       "Content-Type": "application/json"
     },
-    body
+    body,
+    signal
   });
   return verifiedJsonResponse(response, {
     method: "POST",

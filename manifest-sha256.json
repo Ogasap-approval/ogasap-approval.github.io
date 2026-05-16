@@ -9,7 +9,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "4b0a82fa5fa7e5df222ba56e0948862b09f0e94fe7565b341608c412afc8f093"
+      "sha256": "64109abffef54cf5bd1437ad172d18c32a70f1395c4c1bf70d1e7f2b13537edf"
     },
     {
       "path": "kernel.html",
@@ -21,19 +21,19 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "85dc5e85a85d9dc150fba50ed2d5298fdbf57758af260cd4c901bfa9085d1952"
+      "sha256": "702237697a5716bb021416803c2600a90964e67bada0cbaa8d96ff6e8f2d498b"
     },
     {
       "path": "src/api-client.js",
-      "sha256": "263661fc7c44ca36b85b041dcd56227b2e7ed15eee38c47fdc1e0d096088b771"
+      "sha256": "7391662780dae82fd79c4be332e270acc024c7c59c82f22ed0a2ac5be8e8c34a"
     },
     {
       "path": "src/app.js",
-      "sha256": "4449351b2114d7c5bcd91244c4df5eac96234fee00be0fc816b4d8a74350bb67"
+      "sha256": "5bfa8ac5d3ff5f94a5345f1b2be33fc67abf3bc5fd3bf0a86f6e665c355e7f10"
     },
     {
       "path": "src/approval-kernel.js",
-      "sha256": "6ba6bb54aa7211903b47382c4c8972c4c729a5e138b11ec1c6110dd8512533cc"
+      "sha256": "6c4c0d54d6d77483009bc3750f94a6c8d414e611471cced8b4c800e7a4a2fca1"
     },
     {
       "path": "src/assets/icon.svg",
@@ -85,7 +85,7 @@
     },
     {
       "path": "src/kernel-frame.js",
-      "sha256": "dcf28c98e5299cb7cad5bf62edb1814ef72ff6072a9355bab43324dd8a9e8df8"
+      "sha256": "7f711af3393040804281223a6acbcff553ac0c4696ffdf5559745536cbc8063c"
     },
     {
       "path": "src/payment-view.js",
