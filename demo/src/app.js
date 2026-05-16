@@ -37,7 +37,6 @@ const els = {
   bundleCountValue: document.querySelector("#bundleCountValue"),
   totalsStrip: document.querySelector("#totalsStrip"),
   paymentRows: document.querySelector("#paymentRows"),
-  signProgress: document.querySelector("#signProgress"),
   resultPanel: document.querySelector("#resultPanel"),
   resultTitle: document.querySelector("#resultTitle"),
   resultDetail: document.querySelector("#resultDetail"),
@@ -248,8 +247,6 @@ function renderBundle() {
     els.bundleSummary.textContent = "No bundle loaded";
     els.bundleCountValue.textContent = "-";
     els.paymentRows.append(emptyRow());
-    els.signProgress.max = 1;
-    els.signProgress.value = 0;
     renderApprovalState();
     return;
   }
@@ -279,8 +276,6 @@ function renderBundle() {
     els.paymentRows.append(row);
   }
 
-  els.signProgress.max = bundle.payment_inputs.length;
-  els.signProgress.value = 0;
   renderApprovalState();
 }
 
@@ -521,7 +516,6 @@ async function approveBundle() {
   }
 
   els.approveButton.disabled = true;
-  els.signProgress.value = 0;
   setStatus("Waiting for biometric approval");
   writeOutput("");
 
@@ -649,11 +643,6 @@ function signInWorker({ phoneSharePackage, paymentInputs }) {
     const worker = new Worker(new URL("../../prod/src/sign-worker.js", import.meta.url), { type: "module" });
     worker.addEventListener("message", (event) => {
       const message = event.data;
-      if (message.type === "progress") {
-        els.signProgress.max = message.total;
-        els.signProgress.value = message.completed;
-        setStatus(`Signed ${message.completed} of ${message.total}`);
-      }
       if (message.type === "done") {
         worker.terminate();
         resolve(message.signatures);

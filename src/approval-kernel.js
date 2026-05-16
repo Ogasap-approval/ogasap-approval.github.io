@@ -29,16 +29,14 @@ function approvalMetadata({ bundle, phoneSharePackage, webauthnCredential }) {
   };
 }
 
-async function signInVerifiedWorker({ integrityManifest, phoneSharePackage, paymentInputs, onProgress }) {
+async function signInVerifiedWorker({ integrityManifest, phoneSharePackage, paymentInputs }) {
   await assertResourcesIntegrity(integrityManifest, SIGN_WORKER_GRAPH);
 
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("./sign-worker.js", import.meta.url), { type: "module" });
     worker.addEventListener("message", (event) => {
       const message = event.data;
-      if (message.type === "progress") {
-        onProgress(message);
-      } else if (message.type === "done") {
+      if (message.type === "done") {
         worker.terminate();
         resolve(message.signatures);
       } else if (message.type === "error") {
@@ -60,7 +58,6 @@ export async function approveReviewedBundle({
   backendOrigin,
   bundle,
   integrityManifest,
-  onProgress = () => {},
   onStatus = () => {}
 }) {
   if (!phoneSharePackage || !webauthnCredential || !backendOrigin || !bundle) {
@@ -79,8 +76,7 @@ export async function approveReviewedBundle({
   const signatures = await signInVerifiedWorker({
     integrityManifest,
     phoneSharePackage,
-    paymentInputs: bundle.payment_inputs,
-    onProgress
+    paymentInputs: bundle.payment_inputs
   });
 
   return submitBundleApproval({

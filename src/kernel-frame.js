@@ -8,7 +8,6 @@ const ids = [
   "bundleCountValue",
   "totalsStrip",
   "paymentRows",
-  "signProgress",
   "approveButton",
   "resultPanel",
   "resultTitle",
@@ -121,8 +120,6 @@ function renderBundle() {
     els.bundleSummary.textContent = "Nothing to approve";
     els.bundleCountValue.textContent = "-";
     els.paymentRows.append(emptyRow());
-    els.signProgress.max = 1;
-    els.signProgress.value = 0;
     setButtonState();
     reportHeight();
     return;
@@ -139,8 +136,6 @@ function renderBundle() {
 
   appendPaymentRows(els.paymentRows, bundle.payment_inputs.map((input) => deriveVisiblePaymentFromInput(input)));
 
-  els.signProgress.max = bundle.payment_inputs.length;
-  els.signProgress.value = 0;
   setButtonState();
   reportHeight();
 }
@@ -167,7 +162,6 @@ async function approveBundle() {
 
   state.busy = true;
   setButtonState();
-  els.signProgress.value = 0;
   setResult("-");
 
   try {
@@ -177,12 +171,7 @@ async function approveBundle() {
       backendOrigin: state.backendOrigin,
       bundle: state.bundle,
       integrityManifest: state.integrityManifest,
-      onStatus: setStatus,
-      onProgress(progress) {
-        els.signProgress.max = progress.total;
-        els.signProgress.value = progress.completed;
-        setStatus(`Signed ${progress.completed} of ${progress.total}`);
-      }
+      onStatus: setStatus
     });
     const approvalDetail = totalText(state.bundle.totals) || result?.bundle_id || state.bundle.bundle_id;
     const approvalResult = {

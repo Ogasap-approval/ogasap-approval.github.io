@@ -5,10 +5,7 @@ self.addEventListener("message", async (event) => {
   try {
     const signatures = await signPaymentInputsForBundle({
       phoneSharePackage,
-      paymentInputs,
-      onProgress(progress) {
-        self.postMessage({ type: "progress", ...progress });
-      }
+      paymentInputs
     });
 
     self.postMessage({ type: "done", signatures });
