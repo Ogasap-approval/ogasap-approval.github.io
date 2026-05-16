@@ -23,7 +23,7 @@ import {
   randomPrfSaltBase64url,
   requestApprovalAssertion,
   requestPrfWrapKey
-} from "./webauthn.js?v=auto-lock-v38";
+} from "./webauthn.js?v=auto-unlock-v39";
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
@@ -95,7 +95,10 @@ const state = {
   pendingQrPackage: null,
   kernelReady: false,
   pollTimer: 0,
-  pollInFlight: false
+  pollInFlight: false,
+  lockGeneration: 0,
+  autoUnlockInFlight: false,
+  autoUnlockAttemptedGeneration: -1
 };
 
 function setStatus(message, level = "normal") {
@@ -180,6 +183,7 @@ function renderUnlockGate() {
   els.kernelFrame.classList.toggle("hidden", locked);
   els.historyUnlockGate.classList.toggle("hidden", !locked);
   els.historyShell.classList.toggle("hidden", locked);
+  queueAutoUnlock();
 }
 
 function lockPrfSession(message = "App locked") {
@@ -188,6 +192,8 @@ function lockPrfSession(message = "App locked") {
   }
 
   clearPollTimer();
+  state.lockGeneration += 1;
+  state.autoUnlockInFlight = false;
   state.phoneSharePackage = null;
   state.webauthnCredential = publicCredentialForLockedState();
   state.prfWrapKey = null;
@@ -781,6 +787,36 @@ async function unlockFromLockedView() {
   }
 }
 
+function queueAutoUnlock() {
+  if (
+    state.autoUnlockInFlight ||
+    !needsShareUnlock() ||
+    state.activeView === "settings" ||
+    document.visibilityState !== "visible" ||
+    state.autoUnlockAttemptedGeneration === state.lockGeneration
+  ) {
+    return;
+  }
+
+  state.autoUnlockInFlight = true;
+  state.autoUnlockAttemptedGeneration = state.lockGeneration;
+  setTimeout(() => {
+    if (!needsShareUnlock() || state.activeView === "settings" || document.visibilityState !== "visible") {
+      state.autoUnlockInFlight = false;
+      return;
+    }
+    const targetView = state.activeView === "history" ? "history" : "approval";
+    unlockPrfShare()
+      .then(() => showView(targetView))
+      .catch((error) => {
+        setStatus(`Unlock cancelled: ${error.message}`, "warning");
+      })
+      .finally(() => {
+        state.autoUnlockInFlight = false;
+      });
+  }, 150);
+}
+
 async function enablePrfStorage() {
   if (!state.phoneSharePackage || !state.webauthnCredential) {
     throw new Error("Enroll device before enabling PRF storage");
@@ -1056,6 +1092,8 @@ async function init() {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       handleAppHidden();
+    } else if (document.visibilityState === "visible") {
+      queueAutoUnlock();
     }
   });
   window.addEventListener("pagehide", handleAppHidden);
