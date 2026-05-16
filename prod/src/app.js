@@ -261,6 +261,14 @@ function visiblePaymentsFromApproval(approval) {
   }));
 }
 
+function approvalShareText(approval) {
+  const shareIndex = Number(approval?.share_index);
+  if (!Number.isInteger(shareIndex)) {
+    return "Share -";
+  }
+  return shareIndex === state.phoneSharePackage?.share_index ? `You, share ${shareIndex}` : `Share ${shareIndex}`;
+}
+
 function renderRecentApprovals() {
   if (state.selectedApprovalId && !state.recentApprovals.some((approval) => approval.bundle_id === state.selectedApprovalId)) {
     state.selectedApprovalId = "";
@@ -294,7 +302,7 @@ function renderRecentApprovals() {
     const bundle = document.createElement("strong");
     bundle.textContent = `${approval.payment_count ?? "-"} transactions`;
     const detail = document.createElement("span");
-    detail.textContent = `${shortBundleId(approval.bundle_id)} · ${timeText(approval.received_at)}`;
+    detail.textContent = `${approvalShareText(approval)} · ${shortBundleId(approval.bundle_id)} · ${timeText(approval.received_at)}`;
     main.append(bundle, detail);
 
     const meta = document.createElement("div");
@@ -320,7 +328,7 @@ function renderActivityDetail() {
 
   els.activityDetail.classList.remove("activity-detail-empty");
   els.activityDetailTitle.textContent = `${approval.payment_count ?? "-"} transactions`;
-  els.activityDetailSummary.textContent = `${totalText(approval.totals) || "-"} · ${timeText(approval.received_at)} · ${shortBundleId(approval.bundle_id)}`;
+  els.activityDetailSummary.textContent = `${totalText(approval.totals) || "-"} · ${approvalShareText(approval)} · ${timeText(approval.received_at)} · ${shortBundleId(approval.bundle_id)}`;
   els.activityDetailTableWrap.classList.remove("hidden");
   els.activityDetailClose.classList.remove("hidden");
   renderPaymentRows(els.activityDetailRows, visiblePaymentsFromApproval(approval));
