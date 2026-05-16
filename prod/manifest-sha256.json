@@ -9,7 +9,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "4c73647099bf5ecd8e80c05ea2fea4ff6b6a3b2024fe567c5c7271ff9bd2a72b"
+      "sha256": "aa2f0a04ae389f174b0fb8508f78ebfa0f09ab7e97058ef00686e90463392907"
     },
     {
       "path": "kernel.html",
@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "bfc44fb3287999750a562639d11405cb02103d7a7b8b9a1457ade74ad8c9b418"
+      "sha256": "136ba74c640c8324dfa0b66289430dcb5853a6363e561f0e86f2c6286ad940db"
     },
     {
       "path": "src/api-client.js",
@@ -29,7 +29,7 @@
     },
     {
       "path": "src/app.js",
-      "sha256": "4e7ce8745068d22d25063780ce8c674436e243535db4e9d6f2d1dd7067ae8cbf"
+      "sha256": "dd923fe045b7e20ac3cadef057fcd83aefcb3ee439bb0f7df7700e2aae454444"
     },
     {
       "path": "src/approval-kernel.js",
@@ -73,7 +73,7 @@
     },
     {
       "path": "src/core/protocol/signing.js",
-      "sha256": "0ad3521643a8e5dcc3320ffead2fb3144f8a558832a8b3645d066db9cfb5d07b"
+      "sha256": "660663d8a2d730c783937097f7db0000555b9065f30b6aa11edf6f0e6fc7d2d0"
     },
     {
       "path": "src/force-update.js",

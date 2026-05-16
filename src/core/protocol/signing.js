@@ -15,7 +15,7 @@ const ID_8_128 = /^[A-Za-z0-9._:-]{8,128}$/u;
 const APPROVER_ID = /^[A-Za-z0-9._:-]{3,128}$/u;
 const DEVICE_ID = /^[A-Za-z0-9._:-]{16,128}$/u;
 const HEX_64 = /^[a-f0-9]{64}$/u;
-const SUPPORTED_MODULUS_BYTES = new Set([256, 512]);
+const SUPPORTED_MODULUS_BYTES = new Set([256, 384, 512]);
 const PUBLIC_EXPONENT = 65537;
 
 function assertPattern(name, value, pattern) {
