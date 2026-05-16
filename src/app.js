@@ -6,13 +6,22 @@ import {
   clearEnrollment,
   loadBackendOrigin,
   loadPhoneSharePackage,
+  loadPhoneSharePrfSalt,
   loadWebAuthnCredential,
+  phoneSharePackageRequiresPrfUnlock,
   requestPersistentStorage,
   saveBackendOrigin,
   savePhoneSharePackage,
   saveWebAuthnCredential
 } from "./storage.js";
-import { createApprovalCredential, isWebAuthnAvailable, requestApprovalAssertion } from "./webauthn.js";
+import {
+  createApprovalCredential,
+  isWebAuthnAvailable,
+  prfWrapKeyFromCreationResult,
+  randomPrfSaltBase64url,
+  requestApprovalAssertion,
+  requestPrfWrapKey
+} from "./webauthn.js";
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
@@ -34,6 +43,7 @@ const ids = [
   "appHashValue",
   "backendOriginInput",
   "saveBackendButton",
+  "unlockShareButton",
   "scanEnrollmentButton",
   "finishQrEnrollmentButton",
   "enrollmentFile",
@@ -58,6 +68,7 @@ const state = {
   integrityManifest: null,
   integrityError: null,
   backendOrigin: "",
+  shareStorageRequiresPrfUnlock: false,
   bundle: null,
   lastApprovalResult: null,
   recentApprovals: [],
@@ -423,14 +434,16 @@ function renderEnrollment() {
   const pkg = state.phoneSharePackage;
   const credential = state.webauthnCredential;
   const enrolled = Boolean(pkg && credential);
-  els.deviceBadge.textContent = enrolled ? "Enrolled" : "Not enrolled";
-  els.deviceBadge.className = `badge ${enrolled ? "badge-ok" : "badge-muted"}`;
+  const locked = Boolean(credential && state.shareStorageRequiresPrfUnlock && !pkg);
+  els.deviceBadge.textContent = enrolled ? "Enrolled" : locked ? "Locked" : "Not enrolled";
+  els.deviceBadge.className = `badge ${enrolled ? "badge-ok" : locked ? "badge-warn" : "badge-muted"}`;
   els.approverValue.textContent = pkg?.approver_id ?? "-";
   els.deviceValue.textContent = pkg?.device_id ?? "-";
-  els.shareValue.textContent = pkg ? `${pkg.share_index} of ${pkg.players}, threshold ${pkg.threshold}` : "-";
+  els.shareValue.textContent = pkg ? `${pkg.share_index} of ${pkg.players}, threshold ${pkg.threshold}` : locked ? "Locked by WebAuthn PRF" : "-";
   els.keyValue.textContent = pkg?.key_id ?? "-";
-  els.webauthnValue.textContent = credential ? "Registered" : "-";
+  els.webauthnValue.textContent = credential ? credential.prf_enabled ? "Registered + PRF" : "Registered" : "-";
   els.backendOriginInput.value = state.backendOrigin;
+  els.unlockShareButton.classList.toggle("hidden", !locked);
   renderIntegrity();
   renderQrEnrollment();
   sendKernelState();
@@ -504,14 +517,74 @@ async function enrollFromPackage(pkg) {
     approverId: pkg.approver_id,
     deviceId: pkg.device_id
   });
-  await savePhoneSharePackage(pkg);
-  await saveWebAuthnCredential(credential);
+  const prfWrap = await createPrfStorageWrap(credential);
+  await savePhoneSharePackage(pkg, prfWrap ? {
+    prfWrapKey: prfWrap.wrapKey,
+    prfSaltBase64url: prfWrap.saltBase64url
+  } : {});
+  const storedCredential = storableCredentialRecord(credential, prfWrap);
+  await saveWebAuthnCredential(storedCredential);
   state.phoneSharePackage = pkg;
-  state.webauthnCredential = credential;
+  state.webauthnCredential = storedCredential;
+  state.shareStorageRequiresPrfUnlock = Boolean(prfWrap);
   state.pendingQrPackage = null;
   renderEnrollment();
   sendKernelState();
-  setStatus("Device enrolled");
+  setStatus(prfWrap ? "Device enrolled with WebAuthn PRF storage" : "Device enrolled without WebAuthn PRF storage", prfWrap ? "normal" : "warning");
+  pollPendingBundles();
+}
+
+function storableCredentialRecord(credential, prfWrap) {
+  return {
+    credential_id: credential.credential_id,
+    type: credential.type,
+    created_at: credential.created_at,
+    prf_creation_enabled: credential.prf_creation_enabled === true,
+    prf_enabled: Boolean(prfWrap),
+    prf_salt_base64url: prfWrap?.saltBase64url ?? ""
+  };
+}
+
+async function createPrfStorageWrap(credential) {
+  const creationWrapKey = await prfWrapKeyFromCreationResult(credential).catch(() => null);
+  if (creationWrapKey && credential.prf_creation_salt_base64url) {
+    return {
+      wrapKey: creationWrapKey,
+      saltBase64url: credential.prf_creation_salt_base64url
+    };
+  }
+
+  const saltBase64url = randomPrfSaltBase64url();
+  setStatus("Confirm PRF storage with WebAuthn");
+  const wrapKey = await requestPrfWrapKey({
+    credentialId: credential.credential_id,
+    saltBase64url
+  }).catch(() => null);
+
+  return wrapKey ? { wrapKey, saltBase64url } : null;
+}
+
+async function unlockPrfShare() {
+  if (!state.webauthnCredential) {
+    throw new Error("WebAuthn credential is not registered");
+  }
+  const saltBase64url = state.webauthnCredential.prf_salt_base64url || await loadPhoneSharePrfSalt();
+  if (!saltBase64url) {
+    throw new Error("Missing WebAuthn PRF salt");
+  }
+
+  setStatus("Unlock share with WebAuthn");
+  const prfWrapKey = await requestPrfWrapKey({
+    credentialId: state.webauthnCredential.credential_id,
+    saltBase64url
+  });
+  state.phoneSharePackage = await loadPhoneSharePackage({ prfWrapKey });
+  if (!state.phoneSharePackage) {
+    throw new Error("Share unlock failed");
+  }
+  renderEnrollment();
+  sendKernelState();
+  setStatus("Share unlocked");
   pollPendingBundles();
 }
 
@@ -632,6 +705,7 @@ async function resetEnrollment() {
   state.recentApprovals = [];
   state.selectedApprovalId = "";
   state.pendingQrPackage = null;
+  state.shareStorageRequiresPrfUnlock = false;
   state.approvedBundleIds.clear();
   stopQrScanner();
   renderEnrollment();
@@ -668,7 +742,7 @@ async function pollPendingBundles() {
     state.selectedApprovalId = "";
     renderRecentApprovals();
     sendKernelState();
-    setStatus("Enroll device in Settings to check approvals", "warning");
+    setStatus(state.webauthnCredential && state.shareStorageRequiresPrfUnlock ? "Unlock share in Settings to check approvals" : "Enroll device in Settings to check approvals", "warning");
     return;
   }
   if (!state.backendOrigin) {
@@ -730,6 +804,9 @@ async function init() {
     setStatus(error.message, "error");
   }));
   els.cancelQrScanButton.addEventListener("click", () => stopQrScanner("QR scan cancelled"));
+  els.unlockShareButton.addEventListener("click", () => unlockPrfShare().catch((error) => {
+    setStatus(error.message, "error");
+  }));
   els.resetButton.addEventListener("click", () => resetEnrollment().catch((error) => {
     setStatus(error.message, "error");
   }));
@@ -751,8 +828,9 @@ async function init() {
     state.integrityError = error;
     return null;
   });
-  state.phoneSharePackage = await loadPhoneSharePackage().catch(() => null);
   state.webauthnCredential = await loadWebAuthnCredential().catch(() => null);
+  state.shareStorageRequiresPrfUnlock = await phoneSharePackageRequiresPrfUnlock().catch(() => false);
+  state.phoneSharePackage = await loadPhoneSharePackage().catch(() => null);
   state.backendOrigin = await loadBackendOrigin().catch(() => "");
   renderEnrollment();
   renderRecentApprovals();

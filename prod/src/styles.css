@@ -362,6 +362,11 @@ dd {
   color: var(--accent-strong);
 }
 
+.badge-warn {
+  background: #fff0c7;
+  color: var(--warn);
+}
+
 .summary-strip {
   margin: 16px 0;
   justify-content: flex-start;

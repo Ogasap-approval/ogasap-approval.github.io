@@ -468,8 +468,16 @@ async function enrollDemoDevice() {
       approverId: pkg.approver_id,
       deviceId: pkg.device_id
     });
-    await saveWebAuthnCredential(credential);
-    state.webauthnCredential = credential;
+    const storedCredential = {
+      credential_id: credential.credential_id,
+      type: credential.type,
+      created_at: credential.created_at,
+      prf_creation_enabled: credential.prf_creation_enabled === true,
+      prf_enabled: false,
+      prf_salt_base64url: ""
+    };
+    await saveWebAuthnCredential(storedCredential);
+    state.webauthnCredential = storedCredential;
     renderEnrollment();
     setStatus("Test PKI device enrolled");
   } catch (error) {

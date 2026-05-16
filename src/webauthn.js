@@ -2,9 +2,15 @@ import { base64urlToBytes, bytesToBase64url, utf8Encode } from "./core/crypto/by
 
 const LOCAL_RP_IDS = new Set(["localhost", "127.0.0.1"]);
 const GITHUB_PAGES_SUFFIX = ".github.io";
+const PRF_WRAP_HKDF_SALT = utf8Encode("APPROVAL_WEBAUTHN_PRF_WRAP_SALT_V1");
+const PRF_WRAP_HKDF_INFO = utf8Encode("APPROVAL_PHONE_SHARE_PACKAGE_PRF_AES_GCM_V1");
 
 function randomChallenge(length = 32) {
   return crypto.getRandomValues(new Uint8Array(length));
+}
+
+export function randomPrfSaltBase64url() {
+  return bytesToBase64url(randomChallenge());
 }
 
 export function isWebAuthnAvailable() {
@@ -28,6 +34,7 @@ export async function createApprovalCredential({ approverId, deviceId }) {
   }
 
   const userId = utf8Encode(`${approverId}:${deviceId}`).slice(0, 64);
+  const prfCreationSalt = randomChallenge();
   const credential = await navigator.credentials.create({
     publicKey: {
       challenge: randomChallenge(),
@@ -50,7 +57,12 @@ export async function createApprovalCredential({ approverId, deviceId }) {
         userVerification: "required"
       },
       attestation: "none",
-      timeout: 120000
+      timeout: 120000,
+      extensions: {
+        prf: {
+          eval: { first: prfCreationSalt }
+        }
+      }
     }
   });
 
@@ -58,11 +70,79 @@ export async function createApprovalCredential({ approverId, deviceId }) {
     throw new Error("WebAuthn credential creation failed");
   }
 
+  const extensionResults = credential.getClientExtensionResults?.() ?? {};
+  const prfResult = extensionResults.prf?.results?.first;
   return {
     credential_id: bytesToBase64url(new Uint8Array(credential.rawId)),
     type: credential.type,
-    created_at: new Date().toISOString()
+    created_at: new Date().toISOString(),
+    prf_creation_enabled: extensionResults.prf?.enabled === true,
+    prf_creation_salt_base64url: prfResult ? bytesToBase64url(prfCreationSalt) : "",
+    prf_creation_result_base64url: prfResult ? bytesToBase64url(new Uint8Array(prfResult)) : ""
   };
+}
+
+export async function derivePrfWrapKey(prfOutputBytes) {
+  const raw = prfOutputBytes instanceof Uint8Array ? prfOutputBytes : new Uint8Array(prfOutputBytes);
+  if (raw.byteLength < 32) {
+    throw new Error("WebAuthn PRF output is too short");
+  }
+  const key = await crypto.subtle.importKey("raw", raw, "HKDF", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: PRF_WRAP_HKDF_SALT,
+      info: PRF_WRAP_HKDF_INFO
+    },
+    key,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+export async function prfWrapKeyFromCreationResult(credentialRecord) {
+  if (!credentialRecord?.prf_creation_result_base64url) {
+    return null;
+  }
+  return derivePrfWrapKey(base64urlToBytes(credentialRecord.prf_creation_result_base64url));
+}
+
+export async function requestPrfWrapKey({ credentialId, saltBase64url }) {
+  if (!isWebAuthnAvailable()) {
+    throw new Error("WebAuthn is not available");
+  }
+
+  const credential = await navigator.credentials.get({
+    publicKey: {
+      challenge: randomChallenge(),
+      rpId: approvalRpId(),
+      allowCredentials: [
+        {
+          type: "public-key",
+          id: base64urlToBytes(credentialId)
+        }
+      ],
+      userVerification: "required",
+      timeout: 120000,
+      extensions: {
+        prf: {
+          evalByCredential: {
+            [credentialId]: {
+              first: base64urlToBytes(saltBase64url)
+            }
+          }
+        }
+      }
+    }
+  });
+
+  const prfResult = credential?.getClientExtensionResults?.()?.prf?.results?.first;
+  if (!prfResult) {
+    throw new Error("WebAuthn PRF is unavailable for this credential");
+  }
+  return derivePrfWrapKey(prfResult);
 }
 
 export async function requestApprovalAssertion({ credentialId, challengeBytes }) {

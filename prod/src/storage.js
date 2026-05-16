@@ -9,6 +9,7 @@ const SHARE_RECORD_ID = "phone-share-package";
 const WEBAUTHN_RECORD_ID = "webauthn-credential";
 const BACKEND_ORIGIN_RECORD_ID = "backend-origin";
 const SHARE_AAD = utf8Encode("APPROVAL_PHONE_SHARE_PACKAGE_V1");
+const PRF_SHARE_AAD = utf8Encode("APPROVAL_PHONE_SHARE_PACKAGE_PRF_V1");
 const WEBAUTHN_AAD = utf8Encode("APPROVAL_WEBAUTHN_CREDENTIAL_V1");
 
 function requestToPromise(request) {
@@ -69,8 +70,7 @@ async function ensureWrapKey(db) {
   return key;
 }
 
-async function encryptJsonRecord(db, { version, aad, value }) {
-  const key = await ensureWrapKey(db);
+async function encryptJsonWithKey(key, { version, aad, value, extra = {} }) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const plaintext = utf8Encode(JSON.stringify(value));
   const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
@@ -81,18 +81,14 @@ async function encryptJsonRecord(db, { version, aad, value }) {
 
   return {
     version,
+    ...extra,
     iv: bytesToBase64url(iv),
     ciphertext: bytesToBase64url(ciphertext),
     saved_at: new Date().toISOString()
   };
 }
 
-async function decryptJsonRecord(db, record, aad) {
-  const key = await getRecord(db, KEY_STORE, WRAP_KEY_ID);
-  if (!key) {
-    return null;
-  }
-
+async function decryptJsonWithKey(key, record, aad) {
   const plaintext = await crypto.subtle.decrypt(
     {
       name: "AES-GCM",
@@ -106,24 +102,71 @@ async function decryptJsonRecord(db, record, aad) {
   return JSON.parse(utf8Decode(new Uint8Array(plaintext)));
 }
 
-export async function savePhoneSharePackage(pkg) {
+async function encryptJsonRecord(db, options) {
+  return encryptJsonWithKey(await ensureWrapKey(db), options);
+}
+
+async function decryptJsonRecord(db, record, aad) {
+  const key = await getRecord(db, KEY_STORE, WRAP_KEY_ID);
+  return key ? decryptJsonWithKey(key, record, aad) : null;
+}
+
+export async function savePhoneSharePackage(pkg, { prfWrapKey = null, prfSaltBase64url = "" } = {}) {
   const db = await openApprovalDb();
   try {
-    await putRecord(db, STATE_STORE, SHARE_RECORD_ID, await encryptJsonRecord(db, {
-      version: "encrypted_local_share_v1",
-      aad: SHARE_AAD,
-      value: pkg
-    }));
+    if (prfWrapKey && prfSaltBase64url) {
+      await putRecord(db, STATE_STORE, SHARE_RECORD_ID, await encryptJsonWithKey(prfWrapKey, {
+        version: "encrypted_prf_share_v1",
+        aad: PRF_SHARE_AAD,
+        value: pkg,
+        extra: {
+          wrapping: "webauthn_prf",
+          prf_salt_base64url: prfSaltBase64url
+        }
+      }));
+    } else {
+      await putRecord(db, STATE_STORE, SHARE_RECORD_ID, await encryptJsonRecord(db, {
+        version: "encrypted_local_share_v1",
+        aad: SHARE_AAD,
+        value: pkg
+      }));
+    }
   } finally {
     db.close();
   }
 }
 
-export async function loadPhoneSharePackage() {
+export async function loadPhoneSharePackage({ prfWrapKey = null } = {}) {
   const db = await openApprovalDb();
   try {
     const record = await getRecord(db, STATE_STORE, SHARE_RECORD_ID);
-    return record ? await decryptJsonRecord(db, record, SHARE_AAD) : null;
+    if (!record) {
+      return null;
+    }
+    if (record.version === "encrypted_prf_share_v1") {
+      return prfWrapKey ? decryptJsonWithKey(prfWrapKey, record, PRF_SHARE_AAD) : null;
+    }
+    return decryptJsonRecord(db, record, SHARE_AAD);
+  } finally {
+    db.close();
+  }
+}
+
+export async function phoneSharePackageRequiresPrfUnlock() {
+  const db = await openApprovalDb();
+  try {
+    const record = await getRecord(db, STATE_STORE, SHARE_RECORD_ID);
+    return record?.version === "encrypted_prf_share_v1";
+  } finally {
+    db.close();
+  }
+}
+
+export async function loadPhoneSharePrfSalt() {
+  const db = await openApprovalDb();
+  try {
+    const record = await getRecord(db, STATE_STORE, SHARE_RECORD_ID);
+    return record?.version === "encrypted_prf_share_v1" ? record.prf_salt_base64url ?? "" : "";
   } finally {
     db.close();
   }
