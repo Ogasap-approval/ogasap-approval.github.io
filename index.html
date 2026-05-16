@@ -8,14 +8,14 @@
     <title>Approval</title>
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" href="./src/assets/icon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="./src/styles.css?v=auto-unlock-v39">
+    <link rel="stylesheet" href="./src/styles.css?v=status-modal-v40">
   </head>
   <body>
     <header class="app-header">
       <div class="brand-mark" aria-hidden="true">A</div>
-      <div>
+      <div class="header-copy">
         <h1>Approval <span class="route-badge">Prod</span></h1>
-        <p id="runtimeStatus" class="status-line">Starting</p>
+        <button id="runtimeStatus" type="button" class="status-line status-button" aria-haspopup="dialog" aria-expanded="false">Starting</button>
       </div>
       <div class="header-actions">
         <button id="historyButton" type="button" class="secondary header-button" aria-pressed="false">History</button>
@@ -155,6 +155,16 @@
       </section>
     </main>
 
-    <script type="module" src="./src/app.js?v=auto-unlock-v39"></script>
+    <div id="statusModal" class="status-modal hidden" role="dialog" aria-modal="true" aria-labelledby="statusModalTitle">
+      <div class="status-modal-panel">
+        <div class="status-modal-header">
+          <h2 id="statusModalTitle">Status</h2>
+          <button id="statusModalClose" type="button" class="secondary compact-button">Close</button>
+        </div>
+        <p id="statusModalText" class="status-modal-text">-</p>
+      </div>
+    </div>
+
+    <script type="module" src="./src/app.js?v=status-modal-v40"></script>
   </body>
 </html>

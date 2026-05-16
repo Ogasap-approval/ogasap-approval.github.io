@@ -23,13 +23,16 @@ import {
   randomPrfSaltBase64url,
   requestApprovalAssertion,
   requestPrfWrapKey
-} from "./webauthn.js?v=auto-unlock-v39";
+} from "./webauthn.js?v=status-modal-v40";
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
 const QR_SCAN_INTERVAL_MS = 250;
 const ids = [
   "runtimeStatus",
+  "statusModal",
+  "statusModalText",
+  "statusModalClose",
   "approvalView",
   "historyView",
   "settingsView",
@@ -104,6 +107,22 @@ const state = {
 function setStatus(message, level = "normal") {
   els.runtimeStatus.textContent = message;
   els.runtimeStatus.className = level === "error" ? "status-line error" : level === "warning" ? "status-line warning" : "status-line";
+  els.runtimeStatus.classList.add("status-button");
+  els.runtimeStatus.title = message;
+  els.runtimeStatus.setAttribute("aria-label", `Status: ${message}`);
+  els.statusModalText.textContent = message;
+}
+
+function showStatusModal() {
+  els.statusModal.classList.remove("hidden");
+  els.runtimeStatus.setAttribute("aria-expanded", "true");
+  els.statusModalClose.focus();
+}
+
+function hideStatusModal() {
+  els.statusModal.classList.add("hidden");
+  els.runtimeStatus.setAttribute("aria-expanded", "false");
+  els.runtimeStatus.focus();
 }
 
 function prfErrorMessage(error) {
@@ -1128,6 +1147,18 @@ async function init() {
   els.activityDetailClose.addEventListener("click", () => {
     state.selectedApprovalId = "";
     renderRecentApprovals();
+  });
+  els.runtimeStatus.addEventListener("click", showStatusModal);
+  els.statusModalClose.addEventListener("click", hideStatusModal);
+  els.statusModal.addEventListener("click", (event) => {
+    if (event.target === els.statusModal) {
+      hideStatusModal();
+    }
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !els.statusModal.classList.contains("hidden")) {
+      hideStatusModal();
+    }
   });
 
   if ("serviceWorker" in navigator) {
