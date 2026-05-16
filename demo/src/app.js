@@ -34,6 +34,11 @@ const els = {
   totalsStrip: document.querySelector("#totalsStrip"),
   paymentRows: document.querySelector("#paymentRows"),
   signProgress: document.querySelector("#signProgress"),
+  resultPanel: document.querySelector("#resultPanel"),
+  resultTitle: document.querySelector("#resultTitle"),
+  resultDetail: document.querySelector("#resultDetail"),
+  recentCount: document.querySelector("#recentCount"),
+  recentApprovals: document.querySelector("#recentApprovals"),
   approvalOutput: document.querySelector("#approvalOutput")
 };
 
@@ -42,6 +47,8 @@ const state = {
   webauthnCredential: null,
   storagePersistent: null,
   bundle: null,
+  lastApprovalResult: null,
+  recentApprovals: [],
   approvedBundleIds: new Set(),
   signatures: []
 };
@@ -88,6 +95,38 @@ function renderStorage() {
 
 function writeOutput(value) {
   els.approvalOutput.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+}
+
+function totalText(totals = []) {
+  return totals.map((total) => amountMinorToDecimal(total.amount_minor, total.currency)).join(", ");
+}
+
+function shortBundleId(bundleId = "") {
+  return bundleId.length > 18 ? `${bundleId.slice(0, 10)}...${bundleId.slice(-6)}` : bundleId;
+}
+
+function timeText(iso) {
+  const time = Date.parse(iso);
+  if (!Number.isFinite(time)) {
+    return "-";
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(time));
+}
+
+function setResult(result) {
+  state.lastApprovalResult = result;
+  if (!result) {
+    els.resultPanel.className = "result-panel hidden";
+    els.resultTitle.textContent = "-";
+    els.resultDetail.textContent = "-";
+    return;
+  }
+  els.resultPanel.className = `result-panel result-${result.status ?? "normal"}`;
+  els.resultTitle.textContent = result.title ?? "Approval result";
+  els.resultDetail.textContent = result.detail ?? "";
 }
 
 function showSettings(show) {
@@ -169,6 +208,43 @@ function renderBundle() {
   renderApprovalState();
 }
 
+function renderRecentApprovals() {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  state.recentApprovals = state.recentApprovals
+    .filter((approval) => Date.parse(approval.received_at) >= cutoff)
+    .sort((left, right) => Date.parse(right.received_at) - Date.parse(left.received_at));
+  els.recentCount.textContent = String(state.recentApprovals.length);
+  els.recentApprovals.replaceChildren();
+
+  if (state.recentApprovals.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "activity-empty";
+    empty.textContent = "No approvals in the last 24 hours";
+    els.recentApprovals.append(empty);
+    return;
+  }
+
+  for (const approval of state.recentApprovals.slice(0, 20)) {
+    const row = document.createElement("div");
+    row.className = "activity-row";
+
+    const main = document.createElement("div");
+    main.className = "activity-main";
+    const bundle = document.createElement("strong");
+    bundle.textContent = shortBundleId(approval.bundle_id);
+    const detail = document.createElement("span");
+    detail.textContent = `${approval.payment_count} transactions · ${totalText(approval.totals) || "-"}`;
+    main.append(bundle, detail);
+
+    const meta = document.createElement("div");
+    meta.className = "activity-meta";
+    meta.append(cellSpan(timeText(approval.received_at), "activity-time"), cellSpan("Approved", "activity-status"));
+
+    row.append(main, meta);
+    els.recentApprovals.append(row);
+  }
+}
+
 function renderApprovalState() {
   const approved = currentBundleApproved();
   const canApprove = Boolean(state.phoneSharePackage && state.webauthnCredential && state.bundle);
@@ -192,6 +268,15 @@ function emptyRow() {
 
 function cell(text, className = "") {
   const value = document.createElement("td");
+  value.textContent = text;
+  if (className) {
+    value.className = className;
+  }
+  return value;
+}
+
+function cellSpan(text, className = "") {
+  const value = document.createElement("span");
   value.textContent = text;
   if (className) {
     value.className = className;
@@ -235,7 +320,9 @@ async function resetDevice() {
   state.webauthnCredential = null;
   state.signatures = [];
   writeOutput("");
+  setResult(null);
   renderEnrollment();
+  renderRecentApprovals();
   setStatus("Enrollment reset");
 }
 
@@ -307,6 +394,11 @@ async function approveBundle() {
   } catch (error) {
     if (error.status === 409 || error.code === "bundle_already_approved") {
       state.approvedBundleIds.add(state.bundle.bundle_id);
+      setResult({
+        status: "warning",
+        title: "Bundle already approved",
+        detail: "This demo bundle was already recorded."
+      });
       writeOutput(outputBundleContext({
         error: "bundle_already_approved",
         note: "This bundle was already approved."
@@ -315,9 +407,28 @@ async function approveBundle() {
       renderApprovalState();
       return;
     }
+    setResult({
+      status: "failed",
+      title: "Approval failed",
+      detail: error.message
+    });
     throw error;
   }
   state.approvedBundleIds.add(state.bundle.bundle_id);
+  const activity = {
+    bundle_id: state.bundle.bundle_id,
+    status: "approved",
+    payment_count: state.bundle.payment_inputs.length,
+    totals: state.bundle.totals,
+    received_at: backendResult.received_at ?? new Date().toISOString()
+  };
+  state.recentApprovals.unshift(activity);
+  setResult({
+    status: "approved",
+    title: "Bundle approved successfully",
+    detail: `${activity.payment_count} transactions · ${totalText(activity.totals)}`
+  });
+  renderRecentApprovals();
   writeOutput(outputBundleContext({
     approval,
     backend_result: backendResult,
@@ -407,6 +518,8 @@ async function init() {
   state.webauthnCredential = await loadWebAuthnCredential().catch(() => null);
   renderEnrollment();
   renderBundle();
+  renderRecentApprovals();
+  setResult(null);
   showSettings(false);
   if (persistent) {
     setStatus("Ready");

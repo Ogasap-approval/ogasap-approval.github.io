@@ -19,17 +19,20 @@
 }
 
 html {
-  min-height: 100%;
+  min-height: 100dvh;
   background: var(--page);
 }
 
 body {
   margin: 0;
-  overflow-x: hidden;
-  min-height: 100%;
+  overflow: hidden;
+  min-height: 100dvh;
+  height: 100dvh;
   color: var(--ink);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   letter-spacing: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 button,
@@ -48,6 +51,13 @@ input {
   position: sticky;
   top: 0;
   z-index: 2;
+  flex: 0 0 auto;
+}
+
+main {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .icon-button {
@@ -121,7 +131,9 @@ h2 {
 .approval-view,
 .settings-view {
   width: min(680px, calc(100% - 24px));
-  margin: 28px auto 30px;
+  margin: 16px auto;
+  max-height: calc(100dvh - 106px);
+  overflow: hidden;
 }
 
 .work-panel {
@@ -137,16 +149,20 @@ h2 {
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: var(--shadow);
+  overflow: auto;
 }
 
 .work-panel {
   min-width: 0;
   overflow: hidden;
   padding: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .hidden {
-  display: none;
+  display: none !important;
 }
 
 .panel-heading,
@@ -329,6 +345,11 @@ button:disabled {
   overflow: auto;
 }
 
+.bundle-table-wrap {
+  flex: 1 1 auto;
+  min-height: 96px;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -384,6 +405,7 @@ td {
   display: grid;
   gap: 10px;
   padding: 14px 18px 18px;
+  flex: 0 0 auto;
 }
 
 progress {
@@ -397,7 +419,8 @@ progress {
 }
 
 pre {
-  min-height: 68px;
+  min-height: 52px;
+  max-height: 18dvh;
   margin: 0;
   overflow: auto;
   border: 1px solid var(--line);
@@ -407,6 +430,105 @@ pre {
   padding: 12px;
   font-size: 12px;
   line-height: 1.45;
+}
+
+.result-panel {
+  display: grid;
+  gap: 4px;
+  margin: 12px 18px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #f8fbfa;
+}
+
+.result-panel span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.result-approved {
+  border-color: #a8dcc3;
+  background: #eef9f2;
+}
+
+.result-warning {
+  border-color: #e7c56e;
+  background: #fff8e8;
+}
+
+.result-failed {
+  border-color: #e3abab;
+  background: #fff0f0;
+}
+
+.activity-panel {
+  display: grid;
+  gap: 10px;
+  margin: 14px 18px 0;
+  min-height: 0;
+  flex: 0 0 auto;
+}
+
+.activity-list {
+  display: grid;
+  gap: 8px;
+  max-height: 20dvh;
+  overflow: auto;
+}
+
+.activity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 9px 10px;
+}
+
+.activity-main {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.activity-main strong,
+.activity-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-main span,
+.activity-time {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.activity-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.activity-status {
+  border-radius: 999px;
+  background: #dff3e8;
+  color: #14532d;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.activity-empty {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  color: var(--muted);
+  text-align: center;
 }
 
 .error {
@@ -458,7 +580,8 @@ pre {
   .approval-view,
   .settings-view {
     width: calc(100% - 20px);
-    margin: 12px auto 24px;
+    margin: 10px auto;
+    max-height: calc(100dvh - 88px);
   }
 
   .toolbar-actions,
@@ -515,6 +638,16 @@ pre {
     -webkit-overflow-scrolling: touch;
   }
 
+  .activity-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .activity-list {
+    max-height: 18dvh;
+  }
+
   table {
     min-width: 0;
   }
@@ -545,6 +678,6 @@ pre {
   }
 
   pre {
-    max-height: 320px;
+    max-height: 16dvh;
   }
 }

@@ -13,7 +13,8 @@ export async function submitDemoApproval(approval) {
     mode: "local-demo",
     bundle_id: approval.bundle_id,
     payment_count: approval.payment_count,
-    received_phone_sign_shares: approval.phone_sign_shares?.length ?? 0
+    received_phone_sign_shares: approval.phone_sign_shares?.length ?? 0,
+    received_at: new Date().toISOString()
   };
 }
 

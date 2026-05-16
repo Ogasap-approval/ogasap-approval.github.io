@@ -1,4 +1,4 @@
-import { fetchPendingBundles } from "./api-client.js";
+import { fetchPendingBundles, fetchRecentApprovals } from "./api-client.js";
 import { loadIntegrityManifest } from "./integrity.js";
 import {
   clearEnrollment,
@@ -39,6 +39,8 @@ const state = {
   integrityError: null,
   backendOrigin: "",
   bundle: null,
+  lastApprovalResult: null,
+  recentApprovals: [],
   approvedBundleIds: new Set(),
   kernelReady: false,
   pollTimer: 0,
@@ -117,6 +119,8 @@ function sendKernelState() {
     webauthnCredential: state.webauthnCredential,
     backendOrigin: state.backendOrigin,
     bundle: state.bundle,
+    lastApprovalResult: state.lastApprovalResult,
+    recentApprovals: state.recentApprovals,
     approvedBundleIds: [...state.approvedBundleIds]
   }, kernelTargetOrigin());
 }
@@ -134,14 +138,19 @@ function handleKernelMessage(event) {
     sendKernelState();
   } else if (event.data.type === "status") {
     setStatus(event.data.message, event.data.level ?? "normal");
-  } else if (event.data.type === "height" && Number.isFinite(event.data.height)) {
-    els.kernelFrame.style.height = `${Math.max(360, event.data.height)}px`;
   } else if (event.data.type === "approved") {
     state.approvedBundleIds.add(event.data.bundle_id);
+    state.lastApprovalResult = event.data.result ?? null;
     state.bundle = null;
     sendKernelState();
     schedulePendingBundlePoll(1000);
   } else if (event.data.type === "error") {
+    state.lastApprovalResult = event.data.result ?? {
+      status: "failed",
+      title: "Approval failed",
+      detail: event.data.message ?? "The approval could not be submitted."
+    };
+    sendKernelState();
     schedulePendingBundlePoll();
   }
 }
@@ -240,12 +249,14 @@ async function pollPendingBundles() {
   clearPollTimer();
   if (!state.phoneSharePackage) {
     state.bundle = null;
+    state.recentApprovals = [];
     sendKernelState();
     setStatus("Enroll device in Settings to check approvals", "warning");
     return;
   }
   if (!state.backendOrigin) {
     state.bundle = null;
+    state.recentApprovals = [];
     sendKernelState();
     setStatus("Set backend URL in Settings to check approvals", "warning");
     return;
@@ -256,7 +267,11 @@ async function pollPendingBundles() {
     if (!state.bundle) {
       setStatus("Checking for approvals");
     }
-    const bundles = await fetchPendingBundles(state.phoneSharePackage, state.backendOrigin);
+    const [bundles, recentApprovals] = await Promise.all([
+      fetchPendingBundles(state.phoneSharePackage, state.backendOrigin),
+      fetchRecentApprovals(state.phoneSharePackage, state.backendOrigin)
+    ]);
+    state.recentApprovals = recentApprovals;
     const nextBundle = bundles.find((bundle) => !state.approvedBundleIds.has(bundle.bundle_id));
 
     if (!nextBundle) {

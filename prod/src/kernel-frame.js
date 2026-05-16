@@ -10,7 +10,11 @@ const ids = [
   "paymentRows",
   "signProgress",
   "approveButton",
-  "resultValue"
+  "resultPanel",
+  "resultTitle",
+  "resultDetail",
+  "recentCount",
+  "recentApprovals"
 ];
 const els = Object.fromEntries(ids.map((id) => [id, document.querySelector(`#${id}`)]));
 const state = {
@@ -19,6 +23,8 @@ const state = {
   backendOrigin: "",
   integrityManifest: null,
   bundle: null,
+  lastApprovalResult: null,
+  recentApprovals: [],
   approvedBundleIds: new Set(),
   busy: false
 };
@@ -37,8 +43,36 @@ function setStatus(message, level = "normal") {
   post("status", { message, level });
 }
 
-function setResult(message) {
-  els.resultValue.textContent = message;
+function totalText(totals = []) {
+  return totals.map((total) => amountMinorToDecimal(total.amount_minor, total.currency)).join(", ");
+}
+
+function shortBundleId(bundleId = "") {
+  return bundleId.length > 18 ? `${bundleId.slice(0, 10)}...${bundleId.slice(-6)}` : bundleId;
+}
+
+function timeText(iso) {
+  const time = Date.parse(iso);
+  if (!Number.isFinite(time)) {
+    return "-";
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(time));
+}
+
+function setResult(result) {
+  if (!result) {
+    els.resultPanel.classList.add("hidden");
+    els.resultTitle.textContent = "-";
+    els.resultDetail.textContent = "-";
+    els.resultPanel.className = "result-panel hidden";
+    return;
+  }
+  els.resultPanel.className = `result-panel result-${result.status ?? "normal"}`;
+  els.resultTitle.textContent = result.title ?? "Approval result";
+  els.resultDetail.textContent = result.detail ?? "";
 }
 
 function cell(text, className = "") {
@@ -89,8 +123,8 @@ function renderBundle() {
     els.paymentRows.append(emptyRow());
     els.signProgress.max = 1;
     els.signProgress.value = 0;
-    setResult("-");
     setButtonState();
+    renderRecentApprovals();
     reportHeight();
     return;
   }
@@ -117,21 +151,57 @@ function renderBundle() {
 
   els.signProgress.max = bundle.payment_inputs.length;
   els.signProgress.value = 0;
-  setResult("-");
   setButtonState();
+  renderRecentApprovals();
   reportHeight();
+}
+
+function renderRecentApprovals() {
+  const approvals = state.recentApprovals.slice(0, 20);
+  els.recentCount.textContent = String(state.recentApprovals.length);
+  els.recentApprovals.replaceChildren();
+
+  if (approvals.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "activity-empty";
+    empty.textContent = "No approvals in the last 24 hours";
+    els.recentApprovals.append(empty);
+    return;
+  }
+
+  for (const approval of approvals) {
+    const row = document.createElement("div");
+    row.className = "activity-row";
+
+    const main = document.createElement("div");
+    main.className = "activity-main";
+    const bundle = document.createElement("strong");
+    bundle.textContent = shortBundleId(approval.bundle_id);
+    const detail = document.createElement("span");
+    detail.textContent = `${approval.payment_count ?? "-"} transactions · ${totalText(approval.totals) || "-"}`;
+    main.append(bundle, detail);
+
+    const meta = document.createElement("div");
+    meta.className = "activity-meta";
+    meta.append(span(timeText(approval.received_at), "activity-time"), span("Approved", "activity-status"));
+    row.append(main, meta);
+    els.recentApprovals.append(row);
+  }
 }
 
 async function applyState(message) {
   state.phoneSharePackage = message.phoneSharePackage ?? null;
   state.webauthnCredential = message.webauthnCredential ?? null;
   state.backendOrigin = message.backendOrigin ?? "";
+  state.lastApprovalResult = message.lastApprovalResult ?? state.lastApprovalResult;
+  state.recentApprovals = Array.isArray(message.recentApprovals) ? message.recentApprovals : [];
   state.approvedBundleIds = new Set(message.approvedBundleIds ?? []);
 
   if (message.bundle) {
     await validateBundleForApprovalV1(message.bundle);
   }
   state.bundle = message.bundle ?? null;
+  setResult(state.lastApprovalResult);
   renderBundle();
 }
 
@@ -159,25 +229,48 @@ async function approveBundle() {
         setStatus(`Signed ${progress.completed} of ${progress.total}`);
       }
     });
+    const approvalDetail = totalText(state.bundle.totals) || result?.bundle_id || state.bundle.bundle_id;
+    const approvalResult = {
+      status: "approved",
+      title: "Bundle approved successfully",
+      detail: `${state.bundle.payment_inputs.length} transactions · ${approvalDetail}`
+    };
     state.approvedBundleIds.add(state.bundle.bundle_id);
-    setResult(result?.approval_id ?? result?.bundle_id ?? "Submitted");
-    setStatus("Approval submitted");
+    state.lastApprovalResult = approvalResult;
+    setResult(approvalResult);
+    setStatus("Bundle approved");
     post("approved", {
-      bundle_id: state.bundle.bundle_id
+      bundle_id: state.bundle.bundle_id,
+      result: approvalResult
     });
   } catch (error) {
     if (error.status === 409 || error.code === "bundle_already_approved") {
+      const alreadyResult = {
+        status: "warning",
+        title: "Bundle already approved",
+        detail: error.body?.received_at ? `Approved at ${new Date(error.body.received_at).toLocaleString()}` : "This bundle was already recorded by the backend."
+      };
       state.approvedBundleIds.add(state.bundle.bundle_id);
-      setResult("Already approved");
+      state.lastApprovalResult = alreadyResult;
+      setResult(alreadyResult);
       setStatus("Bundle already approved", "warning");
       post("approved", {
-        bundle_id: state.bundle.bundle_id
+        bundle_id: state.bundle.bundle_id,
+        result: alreadyResult
       });
       return;
     }
+    const failedResult = {
+      status: "failed",
+      title: "Approval failed",
+      detail: error.message
+    };
+    state.lastApprovalResult = failedResult;
+    setResult(failedResult);
     setStatus(error.message, "error");
     post("error", {
-      message: error.message
+      message: error.message,
+      result: failedResult
     });
   } finally {
     state.busy = false;
@@ -217,4 +310,5 @@ state.integrityManifest = await loadIntegrityManifest().catch((error) => {
   return null;
 });
 renderBundle();
+setResult(null);
 post("ready");

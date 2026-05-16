@@ -10,6 +10,7 @@ import {
 } from "./core/protocol/signing.js";
 
 const PENDING_BUNDLES_PATH = "/api/approval/pending-bundles";
+const RECENT_APPROVALS_PATH = "/api/approval/recent-approvals";
 const BACKEND_AUTH_NONCE_PATH = "/api/approval/backend-auth-nonce";
 const BUNDLE_APPROVAL_PATH = "/api/approval/bundle-approval";
 const BACKEND_RESPONSE_HEADER = "X-Approval-Backend-Response";
@@ -266,6 +267,37 @@ export async function fetchPendingBundles(phoneSharePackage, backendOrigin) {
   return normalizePendingBundles(await verifiedJsonResponse(response, {
     method: "GET",
     path: PENDING_BUNDLES_PATH,
+    phoneSharePackage,
+    requestServerNonce: auth.serverNonce,
+    requestClientNonce: auth.clientNonce
+  }));
+}
+
+function normalizeRecentApprovals(body) {
+  if (Array.isArray(body)) {
+    return body;
+  }
+  if (Array.isArray(body?.approvals)) {
+    return body.approvals;
+  }
+  return [];
+}
+
+export async function fetchRecentApprovals(phoneSharePackage, backendOrigin) {
+  const auth = await signedApprovalHeaders({
+    method: "GET",
+    path: RECENT_APPROVALS_PATH,
+    phoneSharePackage,
+    backendOrigin
+  });
+  const response = await fetch(apiUrl(RECENT_APPROVALS_PATH, {}, backendOrigin), {
+    method: "GET",
+    headers: auth.headers,
+    cache: "no-store"
+  });
+  return normalizeRecentApprovals(await verifiedJsonResponse(response, {
+    method: "GET",
+    path: RECENT_APPROVALS_PATH,
     phoneSharePackage,
     requestServerNonce: auth.serverNonce,
     requestClientNonce: auth.clientNonce

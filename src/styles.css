@@ -18,10 +18,13 @@
 
 body {
   margin: 0;
-  overflow-x: hidden;
-  min-height: 100vh;
+  overflow: hidden;
+  min-height: 100dvh;
+  height: 100dvh;
   background: var(--bg);
   color: var(--text);
+  display: flex;
+  flex-direction: column;
 }
 
 button,
@@ -147,11 +150,14 @@ h2 {
 main {
   display: grid;
   gap: 16px;
-  padding-bottom: 32px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding-bottom: 16px;
 }
 
 .hidden {
-  display: none;
+  display: none !important;
 }
 
 section {
@@ -162,34 +168,47 @@ section {
   min-width: 0;
 }
 
+#settingsView {
+  overflow: auto;
+}
+
 .kernel-frame-shell {
   position: relative;
   overflow: hidden;
   padding: 0;
   isolation: isolate;
+  min-height: 0;
+  height: 100%;
 }
 
 .kernel-frame {
   display: block;
   width: 100%;
-  min-height: 420px;
+  height: 100%;
+  min-height: 0;
   border: 0;
   background: var(--surface);
 }
 
 .kernel-body {
-  min-height: 0;
+  height: 100dvh;
+  overflow: hidden;
   background: transparent;
 }
 
 .kernel-body main {
   width: 100%;
+  height: 100%;
   padding: 0;
 }
 
 .kernel-body section {
   border: 0;
   border-radius: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .status-line,
@@ -298,9 +317,14 @@ dd {
 }
 
 .table-wrap {
-  overflow-x: auto;
+  overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
+}
+
+.bundle-table-wrap {
+  flex: 1 1 auto;
+  min-height: 96px;
 }
 
 table {
@@ -360,6 +384,103 @@ tr:last-child td {
 .sign-progress {
   width: 100%;
   height: 12px;
+}
+
+.result-panel {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #f7fbf7;
+}
+
+.result-panel span {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.result-approved {
+  border-color: #a8dcc3;
+  background: #eef9f2;
+}
+
+.result-warning {
+  border-color: #e7c56e;
+  background: #fff8e8;
+}
+
+.result-failed {
+  border-color: #e3abab;
+  background: #fff0f0;
+}
+
+.activity-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  min-height: 0;
+}
+
+.activity-list {
+  display: grid;
+  gap: 8px;
+  max-height: 24dvh;
+  overflow: auto;
+}
+
+.activity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 10px;
+}
+
+.activity-main {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.activity-main strong,
+.activity-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-main span,
+.activity-time {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.activity-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.activity-status {
+  border-radius: 999px;
+  background: #dff3e7;
+  color: var(--accent-strong);
+  padding: 3px 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.activity-empty {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  color: var(--muted);
+  text-align: center;
 }
 
 @media (max-width: 760px) {
@@ -440,8 +561,18 @@ tr:last-child td {
   }
 
   .table-wrap {
-    overflow-x: auto;
+    overflow: auto;
     -webkit-overflow-scrolling: touch;
+  }
+
+  .activity-list {
+    max-height: 22dvh;
+  }
+
+  .activity-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
   }
 
   table {
