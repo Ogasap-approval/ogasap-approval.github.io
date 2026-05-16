@@ -101,12 +101,20 @@ main {
   display: grid;
   place-items: center;
   width: 42px;
+  min-height: 42px;
   height: 42px;
+  border: 0;
   border-radius: 8px;
+  padding: 0;
   background: var(--ink);
   color: #fff;
+  cursor: pointer;
   font-size: 28px;
   font-weight: 750;
+}
+
+.brand-mark:hover:not(:disabled) {
+  background: var(--accent-strong);
 }
 
 h1,

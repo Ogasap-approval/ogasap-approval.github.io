@@ -16,6 +16,7 @@ const RESET_CONFIRM_MS = 10000;
 
 const els = {
   runtimeStatus: document.querySelector("#runtimeStatus"),
+  homeButton: document.querySelector("#homeButton"),
   approvalView: document.querySelector("#approvalView"),
   historyView: document.querySelector("#historyView"),
   settingsView: document.querySelector("#settingsView"),
@@ -138,6 +139,10 @@ function timeText(iso) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(time));
+}
+
+function approvalTimeText(approval) {
+  return timeText(approval?.approved_at || approval?.received_at);
 }
 
 function setResult(result) {
@@ -346,7 +351,7 @@ function renderRecentApprovals() {
     const bundle = document.createElement("strong");
     bundle.textContent = `${approval.payment_count ?? "-"} transactions`;
     const detail = document.createElement("span");
-    detail.textContent = `${shortBundleId(approval.bundle_id)} · ${timeText(approval.received_at)}`;
+    detail.textContent = `Approved ${approvalTimeText(approval)} · ${shortBundleId(approval.bundle_id)}`;
     main.append(bundle, detail);
 
     const meta = document.createElement("div");
@@ -380,7 +385,7 @@ function renderActivityDetail() {
   els.activityDetailTitle.textContent = `${approval.payment_count ?? "-"} transactions`;
   els.activityDetailApprover.textContent = approvalApproverText(approval);
   els.activityDetailApprover.classList.remove("hidden");
-  els.activityDetailSummary.textContent = `${totalText(approval.totals) || "-"} · ${timeText(approval.received_at)} · ${shortBundleId(approval.bundle_id)}`;
+  els.activityDetailSummary.textContent = `${totalText(approval.totals) || "-"} · Approved ${approvalTimeText(approval)} · ${shortBundleId(approval.bundle_id)}`;
   els.activityDetailTableWrap.classList.remove("hidden");
   els.activityDetailClose.classList.remove("hidden");
   renderPaymentRows(els.activityDetailRows, visiblePaymentsFromApproval(approval), "Payment details unavailable");
@@ -707,6 +712,7 @@ function signInWorker({ phoneSharePackage, paymentInputs }) {
 
 async function init() {
   window.addEventListener("popstate", () => showView(routeFromLocation()));
+  els.homeButton.addEventListener("click", () => showView("approval", { history: "push" }));
   els.historyButton.addEventListener("click", () => toggleView("history"));
   els.settingsButton.addEventListener("click", () => toggleView("settings"));
   els.enrollDemoButton.addEventListener("click", () => enrollDemoDevice().catch((error) => {

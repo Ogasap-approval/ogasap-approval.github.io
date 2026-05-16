@@ -23,13 +23,14 @@ import {
   randomPrfSaltBase64url,
   requestApprovalAssertion,
   requestPrfWrapKey
-} from "./webauthn.js?v=unlock-poll-v46";
+} from "./webauthn.js?v=history-time-v47";
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
 const QR_SCAN_INTERVAL_MS = 250;
 const ids = [
   "runtimeStatus",
+  "homeButton",
   "statusModal",
   "statusModalText",
   "statusModalClose",
@@ -477,6 +478,10 @@ function timeText(iso) {
   }).format(new Date(time));
 }
 
+function approvalTimeText(approval) {
+  return timeText(approval?.approved_at || approval?.received_at);
+}
+
 function cell(text, className = "") {
   const value = document.createElement("td");
   value.textContent = text;
@@ -579,7 +584,7 @@ function renderRecentApprovals() {
     const bundle = document.createElement("strong");
     bundle.textContent = `${approval.payment_count ?? "-"} transactions`;
     const detail = document.createElement("span");
-    detail.textContent = `${shortBundleId(approval.bundle_id)} · ${timeText(approval.received_at)}`;
+    detail.textContent = `Approved ${approvalTimeText(approval)} · ${shortBundleId(approval.bundle_id)}`;
     main.append(bundle, detail);
 
     const meta = document.createElement("div");
@@ -612,7 +617,7 @@ function renderActivityDetail() {
   els.activityDetailTitle.textContent = `${approval.payment_count ?? "-"} transactions`;
   els.activityDetailApprover.textContent = approvalApproverText(approval);
   els.activityDetailApprover.classList.remove("hidden");
-  els.activityDetailSummary.textContent = `${totalText(approval.totals) || "-"} · ${timeText(approval.received_at)} · ${shortBundleId(approval.bundle_id)}`;
+  els.activityDetailSummary.textContent = `${totalText(approval.totals) || "-"} · Approved ${approvalTimeText(approval)} · ${shortBundleId(approval.bundle_id)}`;
   els.activityDetailTableWrap.classList.remove("hidden");
   els.activityDetailClose.classList.remove("hidden");
   renderPaymentRows(els.activityDetailRows, visiblePaymentsFromApproval(approval));
@@ -1229,6 +1234,7 @@ async function init() {
   });
   window.addEventListener("pagehide", handleAppHidden);
   els.kernelFrame.src = kernelFrameUrl();
+  els.homeButton.addEventListener("click", () => showView("approval", { history: "push" }));
   els.historyButton.addEventListener("click", () => toggleView("history"));
   els.settingsButton.addEventListener("click", () => toggleView("settings"));
   els.enrollmentFile.addEventListener("change", () => enrollFromPackageFile(els.enrollmentFile.files[0]).catch((error) => {
