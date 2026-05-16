@@ -9,7 +9,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "c92fc4dbda1b99f1eab245b4a153a3fdb387a0bd8bd0b45ec9261780da52701d"
+      "sha256": "ae514b2f8cf5fa21f438623237e33ab7e30e7ed7e5b4e2a14593c5ba80a40466"
     },
     {
       "path": "kernel.html",
@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "e8cb6f9f721bdcd43d93c74151721a89ca26f7391c223417026ef477fff5f149"
+      "sha256": "3705c1b37118a5636b4538ca266b9d7b06bcc029377caf3f79363eeb51fd0b6e"
     },
     {
       "path": "src/api-client.js",
@@ -29,7 +29,7 @@
     },
     {
       "path": "src/app.js",
-      "sha256": "236abb61c112e2bccfa6aa86ba7d22364d5e92d5bf05799a042f6c6d58e052d6"
+      "sha256": "a0f576b5f314f53c43250017a163d55ac31c58bf60549a7652d8c76f0db7afa4"
     },
     {
       "path": "src/approval-kernel.js",
@@ -101,7 +101,7 @@
     },
     {
       "path": "src/storage.js",
-      "sha256": "3e335d64748b86ab266a7fc94784b7d2775a7be1b1316149f4d9009497e013b4"
+      "sha256": "e98e8df30f7749f3895d847a51956b6c322e1637fe3abb09460af489a1f9a32c"
     },
     {
       "path": "src/styles.css",

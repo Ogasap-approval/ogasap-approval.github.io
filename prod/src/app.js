@@ -23,7 +23,7 @@ import {
   randomPrfSaltBase64url,
   requestApprovalAssertion,
   requestPrfWrapKey
-} from "./webauthn.js?v=unlock-gate-v34";
+} from "./webauthn.js?v=indexeddb-cleanup-v35";
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
@@ -706,16 +706,15 @@ async function unlockPrfShare() {
     state.backendOriginRequiresPrfUnlock = true;
   }
   state.shareStorageRequiresPrfUnlock = true;
-  if (!state.webauthnCredential.prf_enabled) {
-    state.webauthnCredential = {
-      ...state.webauthnCredential,
-      prf_enabled: true,
-      prf_salt_base64url: saltBase64url,
-      prf_last_checked_at: new Date().toISOString(),
-      prf_last_error: ""
-    };
-    await saveWebAuthnCredential(state.webauthnCredential);
-  }
+  const storedCredential = await loadWebAuthnCredential().catch(() => null);
+  state.webauthnCredential = {
+    ...(storedCredential ?? state.webauthnCredential),
+    prf_enabled: true,
+    prf_salt_base64url: saltBase64url,
+    prf_last_checked_at: new Date().toISOString(),
+    prf_last_error: ""
+  };
+  await saveWebAuthnCredential(state.webauthnCredential);
   renderEnrollment();
   sendKernelState();
   setStatus("Share unlocked");
@@ -1043,8 +1042,10 @@ async function init() {
     state.integrityError = error;
     return null;
   });
-  state.webauthnCredential = await loadWebAuthnCredential().catch(() => null);
   state.shareStorageRequiresPrfUnlock = await phoneSharePackageRequiresPrfUnlock().catch(() => false);
+  state.webauthnCredential = await loadWebAuthnCredential({
+    publicOnly: state.shareStorageRequiresPrfUnlock
+  }).catch(() => null);
   state.backendOriginRequiresPrfUnlock = await backendOriginRequiresPrfUnlock().catch(() => false);
   state.phoneSharePackage = state.shareStorageRequiresPrfUnlock ? null : await loadPhoneSharePackage().catch(() => null);
   state.backendOrigin = state.shareStorageRequiresPrfUnlock || state.backendOriginRequiresPrfUnlock ? "" : await loadBackendOrigin().catch(() => "");

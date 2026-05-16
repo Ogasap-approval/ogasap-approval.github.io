@@ -7,6 +7,7 @@ const STATE_STORE = "state";
 const WRAP_KEY_ID = "share-wrap-v1";
 const SHARE_RECORD_ID = "phone-share-package";
 const WEBAUTHN_RECORD_ID = "webauthn-credential";
+const WEBAUTHN_PUBLIC_RECORD_ID = "webauthn-credential-public";
 const BACKEND_ORIGIN_RECORD_ID = "backend-origin";
 const SHARE_AAD = utf8Encode("APPROVAL_PHONE_SHARE_PACKAGE_V1");
 const PRF_SHARE_AAD = utf8Encode("APPROVAL_PHONE_SHARE_PACKAGE_PRF_V1");
@@ -112,6 +113,23 @@ async function decryptJsonRecord(db, record, aad) {
   return key ? decryptJsonWithKey(key, record, aad) : null;
 }
 
+function publicWebAuthnCredentialRecord(record) {
+  if (typeof record?.credential_id !== "string") {
+    return null;
+  }
+  return {
+    version: "webauthn_credential_public_v1",
+    credential_id: record.credential_id,
+    type: typeof record.type === "string" ? record.type : "public-key",
+    prf_enabled: record.prf_enabled === true,
+    prf_salt_base64url: typeof record.prf_salt_base64url === "string" ? record.prf_salt_base64url : ""
+  };
+}
+
+function credentialFromPublicRecord(record) {
+  return record?.version === "webauthn_credential_public_v1" ? publicWebAuthnCredentialRecord(record) : null;
+}
+
 export async function savePhoneSharePackage(pkg, { prfWrapKey = null, prfSaltBase64url = "" } = {}) {
   const db = await openApprovalDb();
   try {
@@ -176,38 +194,64 @@ export async function loadPhoneSharePrfSalt() {
 export async function saveWebAuthnCredential(record) {
   const db = await openApprovalDb();
   try {
+    const encryptedRecord = await getRecord(db, STATE_STORE, WEBAUTHN_RECORD_ID);
+    const existing = encryptedRecord?.version === "encrypted_webauthn_credential_v1"
+      ? await decryptJsonRecord(db, encryptedRecord, WEBAUTHN_AAD)
+      : null;
+    const value = {
+      ...(existing ?? {}),
+      ...record,
+      saved_at: new Date().toISOString()
+    };
+    const publicRecord = publicWebAuthnCredentialRecord(value);
+    if (publicRecord) {
+      await putRecord(db, STATE_STORE, WEBAUTHN_PUBLIC_RECORD_ID, publicRecord);
+    }
     await putRecord(db, STATE_STORE, WEBAUTHN_RECORD_ID, await encryptJsonRecord(db, {
       version: "encrypted_webauthn_credential_v1",
       aad: WEBAUTHN_AAD,
-      value: {
-        ...record,
-        saved_at: new Date().toISOString()
-      }
+      value
     }));
   } finally {
     db.close();
   }
 }
 
-export async function loadWebAuthnCredential() {
+async function loadPrivateWebAuthnCredential(db) {
+  const record = await getRecord(db, STATE_STORE, WEBAUTHN_RECORD_ID);
+  if (!record) {
+    return null;
+  }
+  if (record.version === "encrypted_webauthn_credential_v1") {
+    return decryptJsonRecord(db, record, WEBAUTHN_AAD);
+  }
+  if (typeof record.credential_id === "string") {
+    await putRecord(db, STATE_STORE, WEBAUTHN_RECORD_ID, await encryptJsonRecord(db, {
+      version: "encrypted_webauthn_credential_v1",
+      aad: WEBAUTHN_AAD,
+      value: record
+    }));
+    return record;
+  }
+  return null;
+}
+
+export async function loadWebAuthnCredential({ publicOnly = false } = {}) {
   const db = await openApprovalDb();
   try {
-    const record = await getRecord(db, STATE_STORE, WEBAUTHN_RECORD_ID);
-    if (!record) {
-      return null;
+    const publicCredential = credentialFromPublicRecord(await getRecord(db, STATE_STORE, WEBAUTHN_PUBLIC_RECORD_ID));
+    if (publicOnly && publicCredential) {
+      return publicCredential;
     }
-    if (record.version === "encrypted_webauthn_credential_v1") {
-      return decryptJsonRecord(db, record, WEBAUTHN_AAD);
+    const privateCredential = await loadPrivateWebAuthnCredential(db);
+    if (!privateCredential) {
+      return publicCredential;
     }
-    if (typeof record.credential_id === "string") {
-      await putRecord(db, STATE_STORE, WEBAUTHN_RECORD_ID, await encryptJsonRecord(db, {
-        version: "encrypted_webauthn_credential_v1",
-        aad: WEBAUTHN_AAD,
-        value: record
-      }));
-      return record;
+    const nextPublicCredential = publicWebAuthnCredentialRecord(privateCredential);
+    if (nextPublicCredential) {
+      await putRecord(db, STATE_STORE, WEBAUTHN_PUBLIC_RECORD_ID, nextPublicCredential);
     }
-    return null;
+    return publicOnly ? nextPublicCredential : privateCredential;
   } finally {
     db.close();
   }
