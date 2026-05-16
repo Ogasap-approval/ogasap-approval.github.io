@@ -111,6 +111,24 @@ input[type="url"] {
   cursor: pointer;
 }
 
+.qr-scanner {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: #f7fbf7;
+}
+
+.qr-video {
+  width: 100%;
+  max-height: min(320px, 42dvh);
+  border-radius: 6px;
+  background: #111;
+  object-fit: cover;
+}
+
 .app-header,
 main {
   width: min(1120px, calc(100vw - 32px));
@@ -681,9 +699,13 @@ tr:last-child td {
     grid-template-columns: 1fr;
   }
 
-  .toolbar button,
-  .button-row button,
-  .file-button {
+	  .toolbar button,
+	  .button-row button,
+	  .file-button {
+	    width: 100%;
+	  }
+
+  .qr-scanner .compact-button {
     width: 100%;
   }
 

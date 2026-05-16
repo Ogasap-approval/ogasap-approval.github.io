@@ -1,4 +1,5 @@
 import { fetchPendingBundles, fetchRecentApprovals } from "./api-client.js";
+import { decodePhoneSharePackageV1 } from "./core/protocol/signing.js";
 import { loadIntegrityManifest } from "./integrity.js";
 import { amountMinorToDecimal } from "./payment-view.js";
 import {
@@ -15,6 +16,7 @@ import { createApprovalCredential, isWebAuthnAvailable, requestApprovalAssertion
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
+const QR_SCAN_INTERVAL_MS = 250;
 const ids = [
   "runtimeStatus",
   "approvalView",
@@ -32,7 +34,12 @@ const ids = [
   "appHashValue",
   "backendOriginInput",
   "saveBackendButton",
+  "scanEnrollmentButton",
+  "finishQrEnrollmentButton",
   "enrollmentFile",
+  "qrScanner",
+  "qrVideo",
+  "cancelQrScanButton",
   "resetButton",
   "recentCount",
   "recentApprovals",
@@ -59,6 +66,9 @@ const state = {
   activeView: "approval",
   resetArmed: false,
   resetTimer: 0,
+  qrStream: null,
+  qrScanTimer: 0,
+  pendingQrPackage: null,
   kernelReady: false,
   pollTimer: 0,
   pollInFlight: false
@@ -402,6 +412,13 @@ function renderIntegrity() {
   els.appHashValue.title = state.integrityError?.message ?? "";
 }
 
+function renderQrEnrollment() {
+  const scanning = Boolean(state.qrStream);
+  els.qrScanner.classList.toggle("hidden", !scanning);
+  els.scanEnrollmentButton.disabled = scanning;
+  els.finishQrEnrollmentButton.classList.toggle("hidden", !state.pendingQrPackage);
+}
+
 function renderEnrollment() {
   const pkg = state.phoneSharePackage;
   const credential = state.webauthnCredential;
@@ -415,7 +432,87 @@ function renderEnrollment() {
   els.webauthnValue.textContent = credential ? "Registered" : "-";
   els.backendOriginInput.value = state.backendOrigin;
   renderIntegrity();
+  renderQrEnrollment();
   sendKernelState();
+}
+
+function packageFromQrUrl(value) {
+  try {
+    const url = new URL(value);
+    for (const key of ["package", "enrollment", "data"]) {
+      const item = url.searchParams.get(key);
+      if (item) {
+        return item;
+      }
+    }
+    return url.hash.length > 1 ? decodeURIComponent(url.hash.slice(1)) : value;
+  } catch {
+    return value;
+  }
+}
+
+function base64urlToText(value) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), "=");
+  const binary = atob(padded);
+  return new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)));
+}
+
+function validateEnrollmentPackage(pkg) {
+  if (pkg?.version === "encrypted_backup_qr_v1") {
+    throw new Error("Encrypted backup QR must be decrypted before enrollment");
+  }
+  decodePhoneSharePackageV1(pkg);
+  return pkg;
+}
+
+function parseEnrollmentPackageText(text) {
+  let payload = packageFromQrUrl(text.trim());
+  for (const prefix of ["approval-enrollment:", "approval-enrollment-v1:"]) {
+    if (payload.startsWith(prefix)) {
+      payload = payload.slice(prefix.length);
+    }
+  }
+
+  let lastError = new Error("empty enrollment package");
+  const candidates = [payload];
+  if (!payload.startsWith("{")) {
+    try {
+      candidates.push(base64urlToText(payload));
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  for (const candidate of candidates) {
+    try {
+      return validateEnrollmentPackage(JSON.parse(candidate));
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+async function enrollFromPackage(pkg) {
+  if (!isWebAuthnAvailable()) {
+    throw new Error("WebAuthn is required on this browser");
+  }
+
+  validateEnrollmentPackage(pkg);
+  const credential = await createApprovalCredential({
+    approverId: pkg.approver_id,
+    deviceId: pkg.device_id
+  });
+  await savePhoneSharePackage(pkg);
+  await saveWebAuthnCredential(credential);
+  state.phoneSharePackage = pkg;
+  state.webauthnCredential = credential;
+  state.pendingQrPackage = null;
+  renderEnrollment();
+  sendKernelState();
+  setStatus("Device enrolled");
+  pollPendingBundles();
 }
 
 async function saveBackendFromSettings() {
@@ -432,23 +529,89 @@ async function enrollFromPackageFile(file) {
   if (!file) {
     return;
   }
-  if (!isWebAuthnAvailable()) {
-    throw new Error("WebAuthn is required on this browser");
+  await enrollFromPackage(parseEnrollmentPackageText(await file.text()));
+  els.enrollmentFile.value = "";
+}
+
+async function createQrDetector() {
+  if (!("BarcodeDetector" in window)) {
+    throw new Error("QR scanning is unavailable in this browser. Use Enroll Package.");
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error("Camera access is unavailable in this browser. Use Enroll Package.");
+  }
+  const supported = await window.BarcodeDetector.getSupportedFormats?.();
+  if (supported && !supported.includes("qr_code")) {
+    throw new Error("QR scanning is unavailable in this browser. Use Enroll Package.");
+  }
+  return new window.BarcodeDetector({ formats: ["qr_code"] });
+}
+
+function stopQrScanner(message = "") {
+  if (state.qrScanTimer) {
+    clearTimeout(state.qrScanTimer);
+    state.qrScanTimer = 0;
+  }
+  if (state.qrStream) {
+    for (const track of state.qrStream.getTracks()) {
+      track.stop();
+    }
+    state.qrStream = null;
+  }
+  els.qrVideo.pause();
+  els.qrVideo.srcObject = null;
+  renderQrEnrollment();
+  if (message) {
+    setStatus(message);
+  }
+}
+
+async function scanQrFrame(detector) {
+  if (!state.qrStream) {
+    return;
   }
 
-  const pkg = JSON.parse(await file.text());
-  const credential = await createApprovalCredential({
-    approverId: pkg.approver_id,
-    deviceId: pkg.device_id
+  try {
+    const codes = await detector.detect(els.qrVideo);
+    const rawValue = codes.find((code) => code.rawValue?.trim())?.rawValue;
+    if (rawValue) {
+      state.pendingQrPackage = parseEnrollmentPackageText(rawValue);
+      stopQrScanner();
+      renderQrEnrollment();
+      setStatus("QR scanned. Tap Enroll QR to finish with WebAuthn.");
+      return;
+    }
+  } catch (error) {
+    stopQrScanner();
+    setStatus(`QR scan failed: ${error.message}`, "error");
+    return;
+  }
+
+  state.qrScanTimer = setTimeout(() => {
+    scanQrFrame(detector);
+  }, QR_SCAN_INTERVAL_MS);
+}
+
+async function startQrEnrollment() {
+  state.pendingQrPackage = null;
+  renderQrEnrollment();
+  const detector = await createQrDetector();
+  state.qrStream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: { facingMode: { ideal: "environment" } }
   });
-  await savePhoneSharePackage(pkg);
-  await saveWebAuthnCredential(credential);
-  state.phoneSharePackage = pkg;
-  state.webauthnCredential = credential;
-  renderEnrollment();
-  sendKernelState();
-  setStatus("Device enrolled");
-  pollPendingBundles();
+  els.qrVideo.srcObject = state.qrStream;
+  await els.qrVideo.play();
+  renderQrEnrollment();
+  setStatus("Scanning enrollment QR");
+  scanQrFrame(detector);
+}
+
+async function finishQrEnrollment() {
+  if (!state.pendingQrPackage) {
+    throw new Error("Scan enrollment QR first");
+  }
+  await enrollFromPackage(state.pendingQrPackage);
 }
 
 async function resetEnrollment() {
@@ -468,7 +631,9 @@ async function resetEnrollment() {
   state.lastApprovalResult = null;
   state.recentApprovals = [];
   state.selectedApprovalId = "";
+  state.pendingQrPackage = null;
   state.approvedBundleIds.clear();
+  stopQrScanner();
   renderEnrollment();
   renderRecentApprovals();
   sendKernelState();
@@ -557,6 +722,14 @@ async function init() {
   els.enrollmentFile.addEventListener("change", () => enrollFromPackageFile(els.enrollmentFile.files[0]).catch((error) => {
     setStatus(error.message, "error");
   }));
+  els.scanEnrollmentButton.addEventListener("click", () => startQrEnrollment().catch((error) => {
+    stopQrScanner();
+    setStatus(error.message, "error");
+  }));
+  els.finishQrEnrollmentButton.addEventListener("click", () => finishQrEnrollment().catch((error) => {
+    setStatus(error.message, "error");
+  }));
+  els.cancelQrScanButton.addEventListener("click", () => stopQrScanner("QR scan cancelled"));
   els.resetButton.addEventListener("click", () => resetEnrollment().catch((error) => {
     setStatus(error.message, "error");
   }));
