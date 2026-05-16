@@ -9,7 +9,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "bfe90f8a53d618358d96825d015698377a035380faf359facd1f248a4395c797"
+      "sha256": "4b0a82fa5fa7e5df222ba56e0948862b09f0e94fe7565b341608c412afc8f093"
     },
     {
       "path": "kernel.html",
@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "b9eeea16b6ec1aa2ca769218cb50412442ab6a1e76ce865a15d7552f4fcc0c16"
+      "sha256": "85dc5e85a85d9dc150fba50ed2d5298fdbf57758af260cd4c901bfa9085d1952"
     },
     {
       "path": "src/api-client.js",
@@ -105,7 +105,7 @@
     },
     {
       "path": "src/styles.css",
-      "sha256": "47ffd7adcaa873c01ebd49ab73f82ed12cac6ef18aceb75770125cb0c491ea74"
+      "sha256": "8c3070a3be90178ef88814ab4f4a5b6e93c60e05c40bfb4b65f27b2421409458"
     },
     {
       "path": "src/webauthn.js",
