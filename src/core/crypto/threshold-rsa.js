@@ -82,10 +82,11 @@ function computeLambda(delta, shares, i, j) {
   if (!foundJ) {
     throw new Error("lambda interpolation share missing from set");
   }
-  if (num % den !== 0n) {
+  const scaledNum = delta * num;
+  if (scaledNum % den !== 0n) {
     throw new Error("lambda interpolation division was not exact");
   }
-  return delta * (num / den);
+  return scaledNum / den;
 }
 
 export function combineSignShares({ modulus, publicExponent, shares, paddedDigest }) {

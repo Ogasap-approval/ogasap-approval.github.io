@@ -9,7 +9,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "aa2f0a04ae389f174b0fb8508f78ebfa0f09ab7e97058ef00686e90463392907"
+      "sha256": "bc0389ce05b09cb74a077ab5a2f41910187ee8bcae1405e8ab966816f020097b"
     },
     {
       "path": "kernel.html",
@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "136ba74c640c8324dfa0b66289430dcb5853a6363e561f0e86f2c6286ad940db"
+      "sha256": "b945433c9c770881c8cd4cef4f114feaee275ac1c4de3df8acbb22417f83d855"
     },
     {
       "path": "src/api-client.js",
@@ -29,7 +29,7 @@
     },
     {
       "path": "src/app.js",
-      "sha256": "dd923fe045b7e20ac3cadef057fcd83aefcb3ee439bb0f7df7700e2aae454444"
+      "sha256": "5ca23d5e49fea02de08e624b199c837251011e0c7c150d73a3829b372517e39e"
     },
     {
       "path": "src/approval-kernel.js",
@@ -61,7 +61,7 @@
     },
     {
       "path": "src/core/crypto/threshold-rsa.js",
-      "sha256": "ddb50ed07b6f803be8cdaa7bcc29a888590e3880a30a36ee95868f405730cf8d"
+      "sha256": "2fc9c0b0039b301904b0f9ecfdfbb63a5e4a80725279b00ac1fa6b51ccce8bad"
     },
     {
       "path": "src/core/protocol/canonical.js",
