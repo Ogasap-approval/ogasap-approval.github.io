@@ -40,6 +40,7 @@ const ids = [
   "activityDetailTitle",
   "activityDetailSummary",
   "activityDetailRows",
+  "activityDetailTableWrap",
   "activityDetailClose"
 ];
 const els = Object.fromEntries(ids.map((id) => [id, document.querySelector(`#${id}`)]));
@@ -264,6 +265,7 @@ function renderRecentApprovals() {
   if (state.selectedApprovalId && !state.recentApprovals.some((approval) => approval.bundle_id === state.selectedApprovalId)) {
     state.selectedApprovalId = "";
   }
+  els.historyView.classList.toggle("history-detail-open", Boolean(state.selectedApprovalId));
 
   const approvals = state.recentApprovals.slice(0, 20);
   els.recentCount.textContent = String(state.recentApprovals.length);
@@ -290,14 +292,14 @@ function renderRecentApprovals() {
     const main = document.createElement("div");
     main.className = "activity-main";
     const bundle = document.createElement("strong");
-    bundle.textContent = shortBundleId(approval.bundle_id);
+    bundle.textContent = `${approval.payment_count ?? "-"} transactions`;
     const detail = document.createElement("span");
-    detail.textContent = `${approval.payment_count ?? "-"} transactions · ${totalText(approval.totals) || "-"}`;
+    detail.textContent = `${shortBundleId(approval.bundle_id)} · ${timeText(approval.received_at)}`;
     main.append(bundle, detail);
 
     const meta = document.createElement("div");
     meta.className = "activity-meta";
-    meta.append(span(timeText(approval.received_at), "activity-time"), span("Approved", "activity-status"));
+    meta.append(span(totalText(approval.totals) || "-", "activity-total"));
     row.append(main, meta);
     els.recentApprovals.append(row);
   }
@@ -307,16 +309,20 @@ function renderRecentApprovals() {
 function renderActivityDetail() {
   const approval = state.recentApprovals.find((item) => item.bundle_id === state.selectedApprovalId);
   if (!approval) {
-    els.activityDetail.classList.add("hidden");
-    els.activityDetailTitle.textContent = "Bundle Details";
-    els.activityDetailSummary.textContent = "-";
+    els.activityDetail.classList.add("activity-detail-empty");
+    els.activityDetailTitle.textContent = "No bundle selected";
+    els.activityDetailSummary.textContent = "Approved last 24h";
+    els.activityDetailTableWrap.classList.add("hidden");
+    els.activityDetailClose.classList.add("hidden");
     els.activityDetailRows.replaceChildren(emptyRow());
     return;
   }
 
-  els.activityDetail.classList.remove("hidden");
-  els.activityDetailTitle.textContent = shortBundleId(approval.bundle_id);
-  els.activityDetailSummary.textContent = `${approval.payment_count ?? "-"} transactions · ${totalText(approval.totals) || "-"} · ${timeText(approval.received_at)}`;
+  els.activityDetail.classList.remove("activity-detail-empty");
+  els.activityDetailTitle.textContent = `${approval.payment_count ?? "-"} transactions`;
+  els.activityDetailSummary.textContent = `${totalText(approval.totals) || "-"} · ${timeText(approval.received_at)} · ${shortBundleId(approval.bundle_id)}`;
+  els.activityDetailTableWrap.classList.remove("hidden");
+  els.activityDetailClose.classList.remove("hidden");
   renderPaymentRows(els.activityDetailRows, visiblePaymentsFromApproval(approval));
 }
 
