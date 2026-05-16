@@ -23,7 +23,7 @@ import {
   randomPrfSaltBase64url,
   requestApprovalAssertion,
   requestPrfWrapKey
-} from "./webauthn.js?v=bundle-queue-v45";
+} from "./webauthn.js?v=unlock-poll-v46";
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
@@ -105,6 +105,7 @@ const state = {
   kernelReady: false,
   pollTimer: 0,
   pollInFlight: false,
+  pollQueued: false,
   lockGeneration: 0,
   autoUnlockInFlight: false,
   autoUnlockAttemptedGeneration: -1
@@ -218,6 +219,7 @@ function lockPrfSession(message = "App locked") {
   }
 
   clearPollTimer();
+  state.pollQueued = false;
   state.lockGeneration += 1;
   state.autoUnlockInFlight = false;
   state.phoneSharePackage = null;
@@ -879,7 +881,7 @@ async function unlockPrfShare() {
   renderEnrollment();
   sendKernelState();
   setStatus("Share unlocked");
-  pollPendingBundles();
+  pollPendingBundles({ queueIfBusy: true });
 }
 
 async function unlockFromLockedView() {
@@ -1127,8 +1129,11 @@ function schedulePendingBundlePoll(delay = POLL_INTERVAL_MS) {
   }, delay);
 }
 
-async function pollPendingBundles() {
+async function pollPendingBundles(options = {}) {
   if (state.pollInFlight) {
+    if (options.queueIfBusy) {
+      state.pollQueued = true;
+    }
     return;
   }
   clearPollTimer();
@@ -1203,7 +1208,12 @@ async function pollPendingBundles() {
     setStatus(`Approval polling failed: ${error.message}`, "error");
   } finally {
     state.pollInFlight = false;
-    schedulePendingBundlePoll();
+    if (state.pollQueued) {
+      state.pollQueued = false;
+      pollPendingBundles();
+    } else {
+      schedulePendingBundlePoll();
+    }
   }
 }
 
