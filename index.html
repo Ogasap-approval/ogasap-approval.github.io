@@ -8,7 +8,7 @@
     <title>Approval</title>
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" href="./src/assets/icon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="./src/styles.css?v=prf-retry-v33">
+    <link rel="stylesheet" href="./src/styles.css?v=unlock-gate-v34">
   </head>
   <body>
     <header class="app-header">
@@ -128,6 +128,13 @@
       </section>
 
       <section id="approvalView" class="kernel-frame-shell" aria-label="Payment approval">
+        <div id="unlockGate" class="unlock-gate hidden" aria-labelledby="unlockGateTitle">
+          <div class="unlock-content">
+            <h2 id="unlockGateTitle">Unlock Share</h2>
+            <p class="status-line">Confirm with WebAuthn to check approvals.</p>
+            <button id="unlockGateButton" type="button">Unlock</button>
+          </div>
+        </div>
         <iframe
           id="kernelFrame"
           class="kernel-frame"
@@ -138,6 +145,6 @@
       </section>
     </main>
 
-    <script type="module" src="./src/app.js?v=prf-retry-v33"></script>
+    <script type="module" src="./src/app.js?v=unlock-gate-v34"></script>
   </body>
 </html>

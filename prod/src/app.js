@@ -3,6 +3,7 @@ import { decodePhoneSharePackageV1 } from "./core/protocol/signing.js";
 import { loadIntegrityManifest } from "./integrity.js";
 import { amountMinorToDecimal } from "./payment-view.js";
 import {
+  backendOriginRequiresPrfUnlock,
   clearEnrollment,
   isStoragePersisted,
   loadBackendOrigin,
@@ -22,7 +23,7 @@ import {
   randomPrfSaltBase64url,
   requestApprovalAssertion,
   requestPrfWrapKey
-} from "./webauthn.js?v=prf-retry-v33";
+} from "./webauthn.js?v=unlock-gate-v34";
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
@@ -35,6 +36,8 @@ const ids = [
   "historyButton",
   "settingsButton",
   "kernelFrame",
+  "unlockGate",
+  "unlockGateButton",
   "deviceBadge",
   "approverValue",
   "deviceValue",
@@ -72,7 +75,10 @@ const state = {
   integrityManifest: null,
   integrityError: null,
   backendOrigin: "",
+  backendOriginRequiresPrfUnlock: false,
   shareStorageRequiresPrfUnlock: false,
+  prfWrapKey: null,
+  prfSaltBase64url: "",
   bundle: null,
   lastApprovalResult: null,
   recentApprovals: [],
@@ -117,6 +123,10 @@ function initialPrfReason(credential) {
   return "PRF extension not enabled at registration";
 }
 
+function needsShareUnlock() {
+  return Boolean(state.webauthnCredential && state.shareStorageRequiresPrfUnlock && !state.phoneSharePackage);
+}
+
 function storagePersistenceText() {
   if (state.storagePersistent === null) {
     return "Checking";
@@ -127,7 +137,7 @@ function storagePersistenceText() {
 function prfStorageText() {
   const pkg = state.phoneSharePackage;
   const credential = state.webauthnCredential;
-  const locked = Boolean(credential && state.shareStorageRequiresPrfUnlock && !pkg);
+  const locked = needsShareUnlock();
   if (locked) {
     return "PRF active, locked";
   }
@@ -149,6 +159,12 @@ function renderStorage() {
   els.storageValue.title = text;
 }
 
+function renderUnlockGate() {
+  const locked = needsShareUnlock();
+  els.unlockGate.classList.toggle("hidden", !locked);
+  els.kernelFrame.classList.toggle("hidden", locked);
+}
+
 function showView(view) {
   state.activeView = view;
   els.approvalView.classList.toggle("hidden", view !== "approval");
@@ -161,6 +177,7 @@ function showView(view) {
   if (view === "history") {
     renderRecentApprovals();
   }
+  renderUnlockGate();
 }
 
 function toggleView(view) {
@@ -214,6 +231,19 @@ async function authorizeBackendOriginChange(nextOrigin) {
   }).catch((error) => {
     throw new Error(`Backend change approval failed: ${error.message}`);
   });
+}
+
+function backendOriginStorageOptions() {
+  if (!state.webauthnCredential?.prf_enabled) {
+    return {};
+  }
+  if (!state.prfWrapKey || !state.prfSaltBase64url) {
+    throw new Error("Unlock share before saving backend URL");
+  }
+  return {
+    prfWrapKey: state.prfWrapKey,
+    prfSaltBase64url: state.prfSaltBase64url
+  };
 }
 
 function clearResetArming() {
@@ -501,7 +531,8 @@ function renderEnrollment() {
   const pkg = state.phoneSharePackage;
   const credential = state.webauthnCredential;
   const enrolled = Boolean(pkg && credential);
-  const locked = Boolean(credential && state.shareStorageRequiresPrfUnlock && !pkg);
+  const locked = needsShareUnlock();
+  const backendOriginLocked = locked || Boolean(state.backendOriginRequiresPrfUnlock && !state.prfWrapKey);
   els.deviceBadge.textContent = enrolled ? "Enrolled" : locked ? "Locked" : "Not enrolled";
   els.deviceBadge.className = `badge ${enrolled ? "badge-ok" : locked ? "badge-warn" : "badge-muted"}`;
   els.approverValue.textContent = pkg?.approver_id ?? "-";
@@ -510,9 +541,13 @@ function renderEnrollment() {
   els.keyValue.textContent = pkg?.key_id ?? "-";
   els.webauthnValue.textContent = credential ? credential.prf_enabled ? "Registered + PRF" : "Registered" : "-";
   renderStorage();
-  els.backendOriginInput.value = state.backendOrigin;
+  els.backendOriginInput.value = backendOriginLocked ? "" : state.backendOrigin;
+  els.backendOriginInput.placeholder = backendOriginLocked ? "Unlock to view backend" : "https://example.com";
+  els.backendOriginInput.disabled = backendOriginLocked;
+  els.saveBackendButton.disabled = backendOriginLocked;
   els.unlockShareButton.classList.toggle("hidden", !locked);
   els.enablePrfButton.classList.toggle("hidden", !canEnablePrfStorage());
+  renderUnlockGate();
   renderIntegrity();
   renderQrEnrollment();
   sendKernelState();
@@ -596,6 +631,15 @@ async function enrollFromPackage(pkg) {
   state.phoneSharePackage = pkg;
   state.webauthnCredential = storedCredential;
   state.shareStorageRequiresPrfUnlock = Boolean(prfWrap);
+  state.prfWrapKey = prfWrap?.wrapKey ?? null;
+  state.prfSaltBase64url = prfWrap?.saltBase64url ?? "";
+  if (state.backendOrigin && prfWrap) {
+    await saveBackendOrigin(state.backendOrigin, {
+      prfWrapKey: prfWrap.wrapKey,
+      prfSaltBase64url: prfWrap.saltBase64url
+    });
+    state.backendOriginRequiresPrfUnlock = true;
+  }
   state.pendingQrPackage = null;
   renderEnrollment();
   sendKernelState();
@@ -649,9 +693,17 @@ async function unlockPrfShare() {
     credentialId: state.webauthnCredential.credential_id,
     saltBase64url
   });
+  state.prfWrapKey = prfWrapKey;
+  state.prfSaltBase64url = saltBase64url;
   state.phoneSharePackage = await loadPhoneSharePackage({ prfWrapKey });
   if (!state.phoneSharePackage) {
     throw new Error("Share unlock failed");
+  }
+  state.backendOriginRequiresPrfUnlock = await backendOriginRequiresPrfUnlock().catch(() => false);
+  state.backendOrigin = await loadBackendOrigin({ prfWrapKey }).catch(() => "");
+  if (state.backendOrigin && !state.backendOriginRequiresPrfUnlock) {
+    await saveBackendOrigin(state.backendOrigin, { prfWrapKey, prfSaltBase64url: saltBase64url });
+    state.backendOriginRequiresPrfUnlock = true;
   }
   state.shareStorageRequiresPrfUnlock = true;
   if (!state.webauthnCredential.prf_enabled) {
@@ -670,6 +722,16 @@ async function unlockPrfShare() {
   pollPendingBundles();
 }
 
+async function unlockFromFrontPage() {
+  try {
+    await unlockPrfShare();
+    showView("approval");
+  } catch (error) {
+    setStatus(`Unlock failed: ${error.message}`, "error");
+    showView("settings");
+  }
+}
+
 async function enablePrfStorage() {
   if (!state.phoneSharePackage || !state.webauthnCredential) {
     throw new Error("Enroll device before enabling PRF storage");
@@ -686,10 +748,16 @@ async function enablePrfStorage() {
       credentialId: state.webauthnCredential.credential_id,
       saltBase64url
     });
+    state.prfWrapKey = prfWrapKey;
+    state.prfSaltBase64url = saltBase64url;
     await savePhoneSharePackage(state.phoneSharePackage, {
       prfWrapKey,
       prfSaltBase64url: saltBase64url
     });
+    if (state.backendOrigin) {
+      await saveBackendOrigin(state.backendOrigin, { prfWrapKey, prfSaltBase64url: saltBase64url });
+      state.backendOriginRequiresPrfUnlock = true;
+    }
     state.webauthnCredential = {
       ...state.webauthnCredential,
       prf_enabled: true,
@@ -720,8 +788,10 @@ async function enablePrfStorage() {
 async function saveBackendFromSettings() {
   const origin = normalizeBackendOrigin(els.backendOriginInput.value.trim());
   await authorizeBackendOriginChange(origin);
-  await saveBackendOrigin(origin);
+  const storageOptions = backendOriginStorageOptions();
+  await saveBackendOrigin(origin, storageOptions);
   state.backendOrigin = origin;
+  state.backendOriginRequiresPrfUnlock = Boolean(storageOptions.prfWrapKey);
   renderEnrollment();
   setStatus("Backend saved");
   pollPendingBundles();
@@ -835,6 +905,9 @@ async function resetEnrollment() {
   state.selectedApprovalId = "";
   state.pendingQrPackage = null;
   state.shareStorageRequiresPrfUnlock = false;
+  state.backendOriginRequiresPrfUnlock = false;
+  state.prfWrapKey = null;
+  state.prfSaltBase64url = "";
   state.approvedBundleIds.clear();
   stopQrScanner();
   renderEnrollment();
@@ -871,7 +944,12 @@ async function pollPendingBundles() {
     state.selectedApprovalId = "";
     renderRecentApprovals();
     sendKernelState();
-    setStatus(state.webauthnCredential && state.shareStorageRequiresPrfUnlock ? "Unlock share in Settings to check approvals" : "Enroll device in Settings to check approvals", "warning");
+    if (needsShareUnlock()) {
+      showView("approval");
+      setStatus("Unlock share to check approvals", "warning");
+    } else {
+      setStatus("Enroll device in Settings to check approvals", "warning");
+    }
     return;
   }
   if (!state.backendOrigin) {
@@ -936,6 +1014,7 @@ async function init() {
   els.unlockShareButton.addEventListener("click", () => unlockPrfShare().catch((error) => {
     setStatus(error.message, "error");
   }));
+  els.unlockGateButton.addEventListener("click", () => unlockFromFrontPage());
   els.enablePrfButton.addEventListener("click", () => enablePrfStorage().catch((error) => {
     setStatus(error.message, "error");
   }));
@@ -966,8 +1045,9 @@ async function init() {
   });
   state.webauthnCredential = await loadWebAuthnCredential().catch(() => null);
   state.shareStorageRequiresPrfUnlock = await phoneSharePackageRequiresPrfUnlock().catch(() => false);
-  state.phoneSharePackage = await loadPhoneSharePackage().catch(() => null);
-  state.backendOrigin = await loadBackendOrigin().catch(() => "");
+  state.backendOriginRequiresPrfUnlock = await backendOriginRequiresPrfUnlock().catch(() => false);
+  state.phoneSharePackage = state.shareStorageRequiresPrfUnlock ? null : await loadPhoneSharePackage().catch(() => null);
+  state.backendOrigin = state.shareStorageRequiresPrfUnlock || state.backendOriginRequiresPrfUnlock ? "" : await loadBackendOrigin().catch(() => "");
   renderEnrollment();
   renderRecentApprovals();
   sendKernelState();

@@ -253,6 +253,24 @@ section {
   height: 100%;
 }
 
+.unlock-gate {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: var(--surface);
+}
+
+.unlock-content {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  max-width: 360px;
+  text-align: center;
+}
+
 .kernel-frame {
   display: block;
   width: 100%;

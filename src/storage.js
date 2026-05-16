@@ -11,6 +11,7 @@ const BACKEND_ORIGIN_RECORD_ID = "backend-origin";
 const SHARE_AAD = utf8Encode("APPROVAL_PHONE_SHARE_PACKAGE_V1");
 const PRF_SHARE_AAD = utf8Encode("APPROVAL_PHONE_SHARE_PACKAGE_PRF_V1");
 const WEBAUTHN_AAD = utf8Encode("APPROVAL_WEBAUTHN_CREDENTIAL_V1");
+const PRF_BACKEND_ORIGIN_AAD = utf8Encode("APPROVAL_BACKEND_ORIGIN_PRF_V1");
 
 function requestToPromise(request) {
   return new Promise((resolve, reject) => {
@@ -212,24 +213,53 @@ export async function loadWebAuthnCredential() {
   }
 }
 
-export async function saveBackendOrigin(origin) {
+export async function saveBackendOrigin(origin, { prfWrapKey = null, prfSaltBase64url = "" } = {}) {
   const db = await openApprovalDb();
   try {
-    await putRecord(db, STATE_STORE, BACKEND_ORIGIN_RECORD_ID, {
-      version: "backend_origin_v1",
-      origin,
-      saved_at: new Date().toISOString()
-    });
+    if (prfWrapKey && prfSaltBase64url) {
+      await putRecord(db, STATE_STORE, BACKEND_ORIGIN_RECORD_ID, await encryptJsonWithKey(prfWrapKey, {
+        version: "encrypted_prf_backend_origin_v1",
+        aad: PRF_BACKEND_ORIGIN_AAD,
+        value: { origin },
+        extra: {
+          wrapping: "webauthn_prf",
+          prf_salt_base64url: prfSaltBase64url
+        }
+      }));
+    } else {
+      await putRecord(db, STATE_STORE, BACKEND_ORIGIN_RECORD_ID, {
+        version: "backend_origin_v1",
+        origin,
+        saved_at: new Date().toISOString()
+      });
+    }
   } finally {
     db.close();
   }
 }
 
-export async function loadBackendOrigin() {
+export async function loadBackendOrigin({ prfWrapKey = null } = {}) {
   const db = await openApprovalDb();
   try {
     const record = await getRecord(db, STATE_STORE, BACKEND_ORIGIN_RECORD_ID);
+    if (record?.version === "encrypted_prf_backend_origin_v1") {
+      if (!prfWrapKey) {
+        return "";
+      }
+      const value = await decryptJsonWithKey(prfWrapKey, record, PRF_BACKEND_ORIGIN_AAD);
+      return typeof value?.origin === "string" ? value.origin : "";
+    }
     return record?.version === "backend_origin_v1" && typeof record.origin === "string" ? record.origin : "";
+  } finally {
+    db.close();
+  }
+}
+
+export async function backendOriginRequiresPrfUnlock() {
+  const db = await openApprovalDb();
+  try {
+    const record = await getRecord(db, STATE_STORE, BACKEND_ORIGIN_RECORD_ID);
+    return record?.version === "encrypted_prf_backend_origin_v1";
   } finally {
     db.close();
   }
