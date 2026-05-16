@@ -222,6 +222,10 @@ section {
   gap: 12px;
 }
 
+.history-detail-header h2 {
+  min-width: 0;
+}
+
 .kernel-frame-shell {
   position: relative;
   overflow: hidden;
@@ -554,9 +558,23 @@ tr:last-child td {
 
 .activity-meta {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 3px;
   flex: 0 0 auto;
+}
+
+.activity-approver {
+  border: 1px solid #b8dbc5;
+  border-radius: 999px;
+  background: #edf8f1;
+  color: var(--accent-strong);
+  font-size: 0.72rem;
+  font-weight: 750;
+  line-height: 1.2;
+  max-width: 100%;
+  padding: 3px 7px;
+  white-space: nowrap;
 }
 
 .activity-total {
@@ -739,6 +757,14 @@ tr:last-child td {
     align-items: flex-start;
     flex-direction: column;
     gap: 6px;
+  }
+
+  .activity-meta {
+    align-items: center;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    width: 100%;
   }
 
   table {

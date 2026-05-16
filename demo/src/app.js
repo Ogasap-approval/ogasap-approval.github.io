@@ -45,6 +45,7 @@ const els = {
   recentApprovals: document.querySelector("#recentApprovals"),
   activityDetail: document.querySelector("#activityDetail"),
   activityDetailTitle: document.querySelector("#activityDetailTitle"),
+  activityDetailApprover: document.querySelector("#activityDetailApprover"),
   activityDetailSummary: document.querySelector("#activityDetailSummary"),
   activityDetailRows: document.querySelector("#activityDetailRows"),
   activityDetailTableWrap: document.querySelector("#activityDetailTableWrap"),
@@ -318,12 +319,15 @@ function renderRecentApprovals() {
     const bundle = document.createElement("strong");
     bundle.textContent = `${approval.payment_count ?? "-"} transactions`;
     const detail = document.createElement("span");
-    detail.textContent = `${approvalShareText(approval)} · ${shortBundleId(approval.bundle_id)} · ${timeText(approval.received_at)}`;
+    detail.textContent = `${shortBundleId(approval.bundle_id)} · ${timeText(approval.received_at)}`;
     main.append(bundle, detail);
 
     const meta = document.createElement("div");
     meta.className = "activity-meta";
-    meta.append(cellSpan(totalText(approval.totals) || "-", "activity-total"));
+    meta.append(
+      cellSpan(approvalApproverText(approval), "activity-approver"),
+      cellSpan(totalText(approval.totals) || "-", "activity-total")
+    );
 
     row.append(main, meta);
     els.recentApprovals.append(row);
@@ -336,6 +340,8 @@ function renderActivityDetail() {
   if (!approval) {
     els.activityDetail.classList.add("activity-detail-empty");
     els.activityDetailTitle.textContent = "No bundle selected";
+    els.activityDetailApprover.textContent = "-";
+    els.activityDetailApprover.classList.add("hidden");
     els.activityDetailSummary.textContent = "Approved last 24h";
     els.activityDetailTableWrap.classList.add("hidden");
     els.activityDetailClose.classList.add("hidden");
@@ -345,7 +351,9 @@ function renderActivityDetail() {
 
   els.activityDetail.classList.remove("activity-detail-empty");
   els.activityDetailTitle.textContent = `${approval.payment_count ?? "-"} transactions`;
-  els.activityDetailSummary.textContent = `${totalText(approval.totals) || "-"} · ${approvalShareText(approval)} · ${timeText(approval.received_at)} · ${shortBundleId(approval.bundle_id)}`;
+  els.activityDetailApprover.textContent = approvalApproverText(approval);
+  els.activityDetailApprover.classList.remove("hidden");
+  els.activityDetailSummary.textContent = `${totalText(approval.totals) || "-"} · ${timeText(approval.received_at)} · ${shortBundleId(approval.bundle_id)}`;
   els.activityDetailTableWrap.classList.remove("hidden");
   els.activityDetailClose.classList.remove("hidden");
   renderPaymentRows(els.activityDetailRows, visiblePaymentsFromApproval(approval), "Payment details unavailable");
@@ -419,9 +427,13 @@ function visiblePaymentsFromApproval(approval) {
 function approvalShareText(approval) {
   const shareIndex = Number(approval?.share_index);
   if (!Number.isInteger(shareIndex)) {
-    return "Share -";
+    return "Share unknown";
   }
   return shareIndex === state.phoneSharePackage?.share_index ? `You, share ${shareIndex}` : `Share ${shareIndex}`;
+}
+
+function approvalApproverText(approval) {
+  return `Approved by ${approvalShareText(approval)}`;
 }
 
 function cell(text, className = "") {
