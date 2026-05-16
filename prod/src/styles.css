@@ -83,11 +83,12 @@ input[type="url"] {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-left: auto;
+  justify-self: end;
 }
 
 .header-copy {
   min-width: 0;
+  overflow: hidden;
 }
 
 .header-button {
@@ -160,7 +161,8 @@ main {
 }
 
 .app-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 16px;
   padding: 24px 0 18px;
@@ -335,7 +337,8 @@ dt {
 .status-button {
   display: block;
   min-height: 0;
-  max-width: min(62vw, 540px);
+  width: 100%;
+  max-width: 100%;
   margin: 0;
   border: 0;
   border-radius: 0;
@@ -780,6 +783,7 @@ tr:last-child td {
   .app-header {
     align-items: center;
     gap: 10px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     padding: 14px 0 12px;
   }
 
