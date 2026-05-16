@@ -190,8 +190,9 @@ section {
 }
 
 .history-view {
-  display: grid;
-  gap: 12px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .kernel-frame-shell {
@@ -446,7 +447,21 @@ tr:last-child td {
 }
 
 .history-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   margin-top: 0;
+}
+
+.history-panel .activity-list {
+  flex: 1 1 0;
+  max-height: none;
+  min-height: 0;
+}
+
+.history-panel .activity-detail {
+  flex: 2 1 0;
+  min-height: 0;
 }
 
 .activity-list {
@@ -523,14 +538,21 @@ tr:last-child td {
 
 .activity-detail {
   border-top: 1px solid var(--line);
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
   padding-top: 10px;
 }
 
 .activity-detail-table-wrap {
+  flex: 1 1 auto;
   max-height: 24dvh;
+  min-height: 0;
   overflow: auto;
+}
+
+.history-panel .activity-detail-table-wrap {
+  max-height: none;
 }
 
 .compact-button {
@@ -622,6 +644,11 @@ tr:last-child td {
 
   .activity-list {
     max-height: 22dvh;
+  }
+
+  .history-panel .activity-list,
+  .history-panel .activity-detail-table-wrap {
+    max-height: none;
   }
 
   .activity-row {

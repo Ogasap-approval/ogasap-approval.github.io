@@ -170,6 +170,12 @@ h2 {
   overflow: auto;
 }
 
+.history-view {
+  height: calc(100dvh - 106px);
+  min-height: 0;
+  overflow: hidden;
+}
+
 .work-panel {
   min-width: 0;
   overflow: hidden;
@@ -489,7 +495,21 @@ pre {
 }
 
 .history-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   margin: 0;
+}
+
+.history-panel .activity-list {
+  flex: 1 1 0;
+  max-height: none;
+  min-height: 0;
+}
+
+.history-panel .activity-detail {
+  flex: 2 1 0;
+  min-height: 0;
 }
 
 .activity-list {
@@ -566,14 +586,21 @@ pre {
 
 .activity-detail {
   border-top: 1px solid var(--line);
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
   padding-top: 10px;
 }
 
 .activity-detail-table-wrap {
+  flex: 1 1 auto;
   max-height: 22dvh;
+  min-height: 0;
   overflow: auto;
+}
+
+.history-panel .activity-detail-table-wrap {
+  max-height: none;
 }
 
 .compact-button {
@@ -633,6 +660,10 @@ pre {
     width: calc(100% - 20px);
     margin: 10px auto;
     max-height: calc(100dvh - 88px);
+  }
+
+  .history-view {
+    height: calc(100dvh - 88px);
   }
 
   .toolbar-actions,
@@ -697,6 +728,11 @@ pre {
 
   .activity-list {
     max-height: 18dvh;
+  }
+
+  .history-panel .activity-list,
+  .history-panel .activity-detail-table-wrap {
+    max-height: none;
   }
 
   table {
