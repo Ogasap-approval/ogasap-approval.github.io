@@ -4,6 +4,10 @@
   "root": "pwa/",
   "files": [
     {
+      "path": "force-update.html",
+      "sha256": "fa231a159e16d173095fa74ad111fbf76b49738ab2483af796d3b796b4bb4b68"
+    },
+    {
       "path": "index.html",
       "sha256": "530e7390f3e06f8524f9ee9af4e41e5d1900382bfc8523b590361bd790434dba"
     },
@@ -17,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "11fa87a575833ff56859dd4a54edb99016df6a5fa2e84782a144f2eb9dc18f70"
+      "sha256": "d4d498e86be41c7fb06529935885a93c99a2440009239dc5d5e398adba610091"
     },
     {
       "path": "src/api-client.js",
@@ -70,6 +74,10 @@
     {
       "path": "src/core/protocol/signing.js",
       "sha256": "0ad3521643a8e5dcc3320ffead2fb3144f8a558832a8b3645d066db9cfb5d07b"
+    },
+    {
+      "path": "src/force-update.js",
+      "sha256": "fea9b1d0b56a542d46b6fff2fc5d96870fc5f647e19f6a8367db5a8962224495"
     },
     {
       "path": "src/integrity.js",
