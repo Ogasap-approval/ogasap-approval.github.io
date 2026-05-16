@@ -9,7 +9,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "ae514b2f8cf5fa21f438623237e33ab7e30e7ed7e5b4e2a14593c5ba80a40466"
+      "sha256": "bfe90f8a53d618358d96825d015698377a035380faf359facd1f248a4395c797"
     },
     {
       "path": "kernel.html",
@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "3705c1b37118a5636b4538ca266b9d7b06bcc029377caf3f79363eeb51fd0b6e"
+      "sha256": "b9eeea16b6ec1aa2ca769218cb50412442ab6a1e76ce865a15d7552f4fcc0c16"
     },
     {
       "path": "src/api-client.js",
@@ -29,7 +29,7 @@
     },
     {
       "path": "src/app.js",
-      "sha256": "a0f576b5f314f53c43250017a163d55ac31c58bf60549a7652d8c76f0db7afa4"
+      "sha256": "4449351b2114d7c5bcd91244c4df5eac96234fee00be0fc816b4d8a74350bb67"
     },
     {
       "path": "src/approval-kernel.js",
@@ -105,7 +105,7 @@
     },
     {
       "path": "src/styles.css",
-      "sha256": "226c4aa623c08c6357c020169fac6b0c782b6fe7b38582affd9309a7eb73fd96"
+      "sha256": "47ffd7adcaa873c01ebd49ab73f82ed12cac6ef18aceb75770125cb0c491ea74"
     },
     {
       "path": "src/webauthn.js",

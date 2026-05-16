@@ -8,7 +8,7 @@
     <title>Approval</title>
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" href="./src/assets/icon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="./src/styles.css?v=indexeddb-cleanup-v35">
+    <link rel="stylesheet" href="./src/styles.css?v=locked-history-v36">
   </head>
   <body>
     <header class="app-header">
@@ -88,7 +88,14 @@
       </section>
 
       <section id="historyView" class="history-view hidden" aria-labelledby="historyTitle">
-        <div class="history-shell" aria-labelledby="historyTitle">
+        <div id="historyUnlockGate" class="unlock-gate hidden" aria-labelledby="historyUnlockGateTitle">
+          <div class="unlock-content">
+            <h2 id="historyUnlockGateTitle">Unlock Share</h2>
+            <p class="status-line">Confirm with WebAuthn to load approval history.</p>
+            <button id="historyUnlockGateButton" type="button">Unlock</button>
+          </div>
+        </div>
+        <div id="historyShell" class="history-shell" aria-labelledby="historyTitle">
           <div class="history-list-pane">
             <div class="history-header">
               <div>
@@ -145,6 +152,6 @@
       </section>
     </main>
 
-    <script type="module" src="./src/app.js?v=indexeddb-cleanup-v35"></script>
+    <script type="module" src="./src/app.js?v=locked-history-v36"></script>
   </body>
 </html>

@@ -23,7 +23,7 @@ import {
   randomPrfSaltBase64url,
   requestApprovalAssertion,
   requestPrfWrapKey
-} from "./webauthn.js?v=indexeddb-cleanup-v35";
+} from "./webauthn.js?v=locked-history-v36";
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
@@ -36,8 +36,11 @@ const ids = [
   "historyButton",
   "settingsButton",
   "kernelFrame",
+  "historyShell",
   "unlockGate",
   "unlockGateButton",
+  "historyUnlockGate",
+  "historyUnlockGateButton",
   "deviceBadge",
   "approverValue",
   "deviceValue",
@@ -163,6 +166,8 @@ function renderUnlockGate() {
   const locked = needsShareUnlock();
   els.unlockGate.classList.toggle("hidden", !locked);
   els.kernelFrame.classList.toggle("hidden", locked);
+  els.historyUnlockGate.classList.toggle("hidden", !locked);
+  els.historyShell.classList.toggle("hidden", locked);
 }
 
 function showView(view) {
@@ -721,10 +726,11 @@ async function unlockPrfShare() {
   pollPendingBundles();
 }
 
-async function unlockFromFrontPage() {
+async function unlockFromLockedView() {
+  const targetView = state.activeView === "history" ? "history" : "approval";
   try {
     await unlockPrfShare();
-    showView("approval");
+    showView(targetView);
   } catch (error) {
     setStatus(`Unlock failed: ${error.message}`, "error");
     showView("settings");
@@ -944,7 +950,9 @@ async function pollPendingBundles() {
     renderRecentApprovals();
     sendKernelState();
     if (needsShareUnlock()) {
-      showView("approval");
+      if (state.activeView !== "history") {
+        showView("approval");
+      }
       setStatus("Unlock share to check approvals", "warning");
     } else {
       setStatus("Enroll device in Settings to check approvals", "warning");
@@ -1013,7 +1021,8 @@ async function init() {
   els.unlockShareButton.addEventListener("click", () => unlockPrfShare().catch((error) => {
     setStatus(error.message, "error");
   }));
-  els.unlockGateButton.addEventListener("click", () => unlockFromFrontPage());
+  els.unlockGateButton.addEventListener("click", () => unlockFromLockedView());
+  els.historyUnlockGateButton.addEventListener("click", () => unlockFromLockedView());
   els.enablePrfButton.addEventListener("click", () => enablePrfStorage().catch((error) => {
     setStatus(error.message, "error");
   }));
