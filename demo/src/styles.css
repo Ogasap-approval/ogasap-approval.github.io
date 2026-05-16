@@ -512,6 +512,35 @@ pre {
   min-height: 0;
 }
 
+.history-panel .badge {
+  min-height: 20px;
+  padding: 2px 7px;
+  font-size: 11px;
+}
+
+.history-panel .activity-row {
+  gap: 8px;
+  padding: 6px 8px;
+}
+
+.history-panel .activity-main {
+  gap: 0;
+}
+
+.history-panel .activity-main strong {
+  font-size: 13px;
+}
+
+.history-panel .activity-main span,
+.history-panel .activity-time {
+  font-size: 11px;
+}
+
+.history-panel .activity-status {
+  padding: 2px 6px;
+  font-size: 10px;
+}
+
 .activity-list {
   display: grid;
   gap: 8px;

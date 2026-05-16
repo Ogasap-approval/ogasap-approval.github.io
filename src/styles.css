@@ -464,6 +464,34 @@ tr:last-child td {
   min-height: 0;
 }
 
+.history-panel .badge {
+  padding: 2px 7px;
+  font-size: 0.72rem;
+}
+
+.history-panel .activity-row {
+  gap: 8px;
+  padding: 6px 8px;
+}
+
+.history-panel .activity-main {
+  gap: 0;
+}
+
+.history-panel .activity-main strong {
+  font-size: 0.86rem;
+}
+
+.history-panel .activity-main span,
+.history-panel .activity-time {
+  font-size: 0.76rem;
+}
+
+.history-panel .activity-status {
+  padding: 2px 6px;
+  font-size: 0.68rem;
+}
+
 .activity-list {
   display: grid;
   gap: 8px;

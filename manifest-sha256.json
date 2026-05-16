@@ -17,7 +17,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "a6dfe2e42469b398634f07e579772f11746a8f72d6ced40f59cc5d08114e88f9"
+      "sha256": "11fa87a575833ff56859dd4a54edb99016df6a5fa2e84782a144f2eb9dc18f70"
     },
     {
       "path": "src/api-client.js",
@@ -97,7 +97,7 @@
     },
     {
       "path": "src/styles.css",
-      "sha256": "73be1527d22ba62ee464db26f0d175b106e5bbfbaf4a11c16631682a26c30b2e"
+      "sha256": "9249a440f61ce60e1ad951efea0c2b988f14a0bcd09f3827c4960b528a6e706c"
     },
     {
       "path": "src/webauthn.js",
