@@ -4,9 +4,9 @@ export const POLLING_CAPABILITY_HORIZON_HOURS = 76;
 export const POLLING_CAPABILITY_SLOT_INTERVAL_MINUTES = 30;
 export const POLLING_CAPABILITY_SLOT_COUNT =
   (POLLING_CAPABILITY_HORIZON_HOURS * 60) / POLLING_CAPABILITY_SLOT_INTERVAL_MINUTES;
-export const POLLING_CAPABILITY_EXTERNAL_ID_CHUNK_SIZE = 25;
+export const POLLING_CAPABILITY_EXTERNAL_ID_CHUNK_SIZE = 20;
 export const DEFAULT_DETERMINISTIC_POLLING_PATHS = [
-  "/corporate/premium/v2/payments?page=1&size=100"
+  "/corporate/premium/v2/payments?page=1&size=20"
 ];
 
 function originatingHeadersFromBundle(bundle) {
@@ -56,7 +56,7 @@ function encodeExternalIds(externalIds) {
 }
 
 function paymentStatusPath(externalIds) {
-  return `/corporate/premium/v2/payments?external_ids=${encodeExternalIds(externalIds)}&page=1&size=100`;
+  return `/corporate/premium/v2/payments?external_ids=${encodeExternalIds(externalIds)}&page=1&size=20`;
 }
 
 function requestId(bundleId, scope, slotIndex, index) {
