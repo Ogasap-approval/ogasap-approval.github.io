@@ -1,10 +1,10 @@
 import { createBankInputSignerV1 } from "./core/protocol/signing.js";
 
-const MAX_SIGNING_WORKERS = 4;
+const MAX_SIGNING_WORKERS = 8;
 
 function workerCountFor(total) {
   const reported = Number(globalThis.navigator?.hardwareConcurrency);
-  const available = Number.isFinite(reported) && reported > 1 ? reported - 1 : 1;
+  const available = Number.isFinite(reported) && reported > 2 ? reported - 1 : 1;
   return Math.max(1, Math.min(MAX_SIGNING_WORKERS, available, total));
 }
 

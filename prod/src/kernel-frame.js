@@ -123,11 +123,14 @@ function approvalProgressText(progress) {
   }
   const percent = boundedPercent(progress);
   const current = Math.max(1, Math.min(progress.phase_total ?? progress.total ?? 1, progress.current ?? progress.phase_completed ?? 1));
+  const total = progress.phase_total ?? progress.total ?? 1;
+  const workers = Number(progress.worker_count ?? 1);
+  const workerText = `${Number.isFinite(workers) && workers > 0 ? workers : 1} worker${workers === 1 ? "" : "s"}`;
   if (progress.stage === "payments") {
-    return `Signing payment ${current}/${progress.phase_total} · ${percent}%`;
+    return `Signing payment req. ${current}/${total} · ${workerText} · ${percent}%`;
   }
   if (progress.stage === "polling") {
-    return `Signing later requests ${current}/${progress.phase_total} · ${percent}%`;
+    return `Signing status req. ${current}/${total} · ${workerText} · ${percent}%`;
   }
   if (progress.stage === "submitting") {
     return "Submitting approval · 100%";
