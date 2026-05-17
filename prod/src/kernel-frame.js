@@ -77,6 +77,9 @@ function bankSubmissionText(submission) {
   if (submission.status === "key_inactive") {
     return "bank signing key inactive";
   }
+  if (submission.status === "date_invalid") {
+    return "bank date expired";
+  }
   if (submission.status === "failed") {
     return `Bank submission failed${submission.error ? `: ${submission.error}` : ""}`;
   }
@@ -279,7 +282,7 @@ async function applyState(message) {
   state.phoneSharePackage = nextPhoneSharePackage;
   state.webauthnCredential = message.webauthnCredential ?? null;
   state.backendOrigin = message.backendOrigin ?? "";
-  state.lastApprovalResult = message.lastApprovalResult ?? state.lastApprovalResult;
+  state.lastApprovalResult = Object.hasOwn(message, "lastApprovalResult") ? message.lastApprovalResult : state.lastApprovalResult;
   state.approvedBundleIds = new Set(message.approvedBundleIds ?? []);
 
   if (message.bundle) {
@@ -341,7 +344,7 @@ async function approveBundle() {
       setStatus("Approval cancelled by app lock", "warning");
       return;
     }
-    if (error.status === 409 || error.code === "bundle_already_approved") {
+    if (error.code === "bundle_already_approved") {
       const alreadyResult = {
         status: "warning",
         title: "Bundle already approved",

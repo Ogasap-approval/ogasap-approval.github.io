@@ -23,7 +23,7 @@ import {
   randomPrfSaltBase64url,
   requestApprovalAssertion,
   requestPrfWrapKey
-} from "./webauthn.js?v=mixed-bank-v66";
+} from "./webauthn.js?v=date-refresh-v67";
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
@@ -245,11 +245,22 @@ function lockPrfSession(message = "App locked") {
   return true;
 }
 
+function clearTransientApprovalResult() {
+  if (!state.lastApprovalResult) {
+    return false;
+  }
+  state.lastApprovalResult = null;
+  sendKernelState();
+  return true;
+}
+
 function handleAppHidden() {
   if (state.qrStream) {
     stopQrScanner();
   }
-  lockPrfSession("App locked");
+  if (!lockPrfSession("App locked")) {
+    clearTransientApprovalResult();
+  }
 }
 
 function routeFromLocation() {
@@ -422,7 +433,7 @@ function bankPaymentSummaryText(payments = []) {
       counts.executed += 1;
     } else if (
       ["PAYMENT_REJECTED", "PAYMENT_CANCELLED", "AUTHORIZATION_FAILED"].includes(paymentStatus) ||
-      ["failed", "auth_expired", "key_inactive"].includes(bankStatus) ||
+      ["failed", "auth_expired", "key_inactive", "date_invalid"].includes(bankStatus) ||
       payment.bank_error
     ) {
       counts.failed += 1;
@@ -453,6 +464,9 @@ function bankPaymentSummaryText(payments = []) {
 }
 
 function bankSubmissionText(submission, payments = []) {
+  if (submission?.status === "date_invalid") {
+    return "Bank date expired";
+  }
   const paymentSummary = bankPaymentSummaryText(payments);
   if (paymentSummary) {
     return paymentSummary;
@@ -486,6 +500,9 @@ function bankSubmissionText(submission, payments = []) {
   if (submission.status === "key_inactive") {
     return "Bank key inactive";
   }
+  if (submission.status === "date_invalid") {
+    return "Bank date expired";
+  }
   if (submission.status === "failed") {
     return "Bank failed";
   }
@@ -501,6 +518,9 @@ function bankPaymentStatusText(payment) {
   }
   if (payment.bank_status === "key_inactive" || payment.bank_error === "bank_signing_key_inactive") {
     return "Bank key inactive";
+  }
+  if (payment.bank_status === "date_invalid" || payment.bank_error === "bank_originating_date_expired") {
+    return "Bank date expired";
   }
   if (payment.bank_error) {
     return `Bank failed: ${payment.bank_error}`;
@@ -781,6 +801,8 @@ function handleKernelMessage(event) {
   } else if (event.data.type === "status") {
     setStatus(event.data.message, event.data.level ?? "normal");
   } else if (event.data.type === "started") {
+    clearPollTimer();
+    state.pollQueued = false;
     state.lastApprovalResult = null;
     sendKernelState();
   } else if (event.data.type === "approved") {
@@ -1411,7 +1433,7 @@ async function init() {
   });
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./service-worker.js?v=mixed-bank-v66").catch(() => {});
+    navigator.serviceWorker.register("./service-worker.js?v=date-refresh-v67").catch(() => {});
   }
 
   let persistent = await isStoragePersisted().catch(() => false);

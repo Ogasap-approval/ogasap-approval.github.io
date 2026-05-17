@@ -142,7 +142,7 @@ function bankPaymentSummaryText(payments = []) {
       counts.executed += 1;
     } else if (
       ["PAYMENT_REJECTED", "PAYMENT_CANCELLED", "AUTHORIZATION_FAILED"].includes(paymentStatus) ||
-      ["failed", "auth_expired", "key_inactive"].includes(bankStatus) ||
+      ["failed", "auth_expired", "key_inactive", "date_invalid"].includes(bankStatus) ||
       payment.bank_error
     ) {
       counts.failed += 1;
@@ -173,6 +173,9 @@ function bankPaymentSummaryText(payments = []) {
 }
 
 function bankSubmissionText(submission, payments = []) {
+  if (submission?.status === "date_invalid") {
+    return "Bank date expired";
+  }
   const paymentSummary = bankPaymentSummaryText(payments);
   if (paymentSummary) {
     return paymentSummary;
@@ -206,6 +209,9 @@ function bankSubmissionText(submission, payments = []) {
   if (submission.status === "key_inactive") {
     return "Bank key inactive";
   }
+  if (submission.status === "date_invalid") {
+    return "Bank date expired";
+  }
   if (submission.status === "failed") {
     return "Bank failed";
   }
@@ -221,6 +227,9 @@ function bankPaymentStatusText(payment) {
   }
   if (payment.bank_status === "key_inactive" || payment.bank_error === "bank_signing_key_inactive") {
     return "Bank key inactive";
+  }
+  if (payment.bank_status === "date_invalid" || payment.bank_error === "bank_originating_date_expired") {
+    return "Bank date expired";
   }
   if (payment.bank_error) {
     return `Bank failed: ${payment.bank_error}`;
@@ -832,7 +841,7 @@ async function approveBundle() {
   try {
     backendResult = await submitDemoApproval(approval);
   } catch (error) {
-    if (error.status === 409 || error.code === "bundle_already_approved") {
+    if (error.code === "bundle_already_approved") {
       state.approvedBundleIds.add(state.bundle.bundle_id);
       setResult({
         status: "warning",
@@ -952,7 +961,7 @@ async function init() {
   });
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./service-worker.js?v=mixed-bank-v44").catch(() => {});
+    navigator.serviceWorker.register("./service-worker.js?v=date-refresh-v45").catch(() => {});
   }
 
   let persistent = await isStoragePersisted().catch(() => false);
