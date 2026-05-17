@@ -23,7 +23,7 @@ import {
   randomPrfSaltBase64url,
   requestApprovalAssertion,
   requestPrfWrapKey
-} from "./webauthn.js?v=auth-expired-v64";
+} from "./webauthn.js?v=key-inactive-v65";
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
@@ -433,6 +433,12 @@ function bankSubmissionText(submission) {
   if (submission.status === "auth_expired") {
     return "Bank auth expired";
   }
+  if (submission.status === "key_refreshing") {
+    return "Bank key renewal";
+  }
+  if (submission.status === "key_inactive") {
+    return "Bank key inactive";
+  }
   if (submission.status === "failed") {
     return "Bank failed";
   }
@@ -442,6 +448,12 @@ function bankSubmissionText(submission) {
 function bankPaymentStatusText(payment) {
   if (payment.bank_status === "auth_expired" || payment.bank_error === "bank_access_token_expired") {
     return "Bank auth expired";
+  }
+  if (payment.bank_status === "key_refreshing" || payment.bank_error === "bank_signing_key_inactive_refreshing") {
+    return "Bank key renewal";
+  }
+  if (payment.bank_status === "key_inactive" || payment.bank_error === "bank_signing_key_inactive") {
+    return "Bank key inactive";
   }
   if (payment.bank_error) {
     return `Bank failed: ${payment.bank_error}`;
@@ -1352,7 +1364,7 @@ async function init() {
   });
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./service-worker.js?v=auth-expired-v64").catch(() => {});
+    navigator.serviceWorker.register("./service-worker.js?v=key-inactive-v65").catch(() => {});
   }
 
   let persistent = await isStoragePersisted().catch(() => false);

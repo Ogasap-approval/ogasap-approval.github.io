@@ -71,6 +71,12 @@ function bankSubmissionText(submission) {
   if (submission.status === "auth_expired") {
     return "bank auth expired";
   }
+  if (submission.status === "key_refreshing") {
+    return "renewing bank signing key";
+  }
+  if (submission.status === "key_inactive") {
+    return "bank signing key inactive";
+  }
   if (submission.status === "failed") {
     return `Bank submission failed${submission.error ? `: ${submission.error}` : ""}`;
   }
