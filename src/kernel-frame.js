@@ -182,8 +182,10 @@ async function approveBundle() {
   const lockEpoch = state.lockEpoch;
   const approvalAbortController = new AbortController();
   state.approvalAbortController = approvalAbortController;
+  state.lastApprovalResult = null;
   setButtonState();
-  setResult("-");
+  setResult(null);
+  post("started");
 
   try {
     const result = await approveReviewedBundle({

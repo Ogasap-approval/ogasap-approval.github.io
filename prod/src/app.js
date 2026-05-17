@@ -23,7 +23,7 @@ import {
   randomPrfSaltBase64url,
   requestApprovalAssertion,
   requestPrfWrapKey
-} from "./webauthn.js?v=history-time-v49";
+} from "./webauthn.js?v=history-time-v50";
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
@@ -652,6 +652,9 @@ function handleKernelMessage(event) {
     sendKernelState();
   } else if (event.data.type === "status") {
     setStatus(event.data.message, event.data.level ?? "normal");
+  } else if (event.data.type === "started") {
+    state.lastApprovalResult = null;
+    sendKernelState();
   } else if (event.data.type === "approved") {
     state.approvedBundleIds.add(event.data.bundle_id);
     state.lastApprovalResult = event.data.result ?? null;

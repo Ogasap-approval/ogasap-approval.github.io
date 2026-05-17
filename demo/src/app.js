@@ -566,6 +566,7 @@ async function approveBundle() {
   }
 
   els.approveButton.disabled = true;
+  setResult(null);
   setStatus("Waiting for biometric approval");
   writeOutput("");
 
