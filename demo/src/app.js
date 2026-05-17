@@ -62,6 +62,8 @@ const state = {
   recentApprovals: [],
   selectedApprovalId: "",
   approvedBundleIds: new Set(),
+  approvalBusy: false,
+  approvalProgress: null,
   activeView: "approval",
   resetArmed: false,
   resetTimer: 0,
@@ -440,12 +442,55 @@ function renderActivityDetail() {
 function renderApprovalState() {
   const approved = currentBundleApproved();
   const canApprove = Boolean(state.phoneSharePackage && state.webauthnCredential && state.bundle);
-  els.approveButton.disabled = approved || !canApprove;
-  els.approveButton.textContent = approved ? "Approved" : "Approve";
+  const showProgress = state.approvalBusy && !approved && state.approvalProgress;
+  els.approveButton.classList.toggle("approve-button-progress", Boolean(showProgress));
+  if (showProgress) {
+    els.approveButton.style.setProperty("--approval-progress", `${boundedPercent(state.approvalProgress)}%`);
+    els.approveButton.title = approvalProgressText(state.approvalProgress);
+  } else {
+    els.approveButton.style.removeProperty("--approval-progress");
+    els.approveButton.title = "";
+  }
+  els.approveButton.disabled = state.approvalBusy || approved || !canApprove;
+  els.approveButton.textContent = approved ? "Approved" : showProgress ? approvalProgressText(state.approvalProgress) : "Approve";
 }
 
 function currentBundleApproved() {
   return Boolean(state.bundle && state.approvedBundleIds.has(state.bundle.bundle_id));
+}
+
+function boundedPercent(progress) {
+  const value = Number(progress?.percent ?? 0);
+  return Math.max(0, Math.min(100, Number.isFinite(value) ? Math.round(value) : 0));
+}
+
+function approvalProgressText(progress) {
+  if (!progress) {
+    return "Approve";
+  }
+  if (progress.message) {
+    return progress.message;
+  }
+  const percent = boundedPercent(progress);
+  const current = Math.max(1, Math.min(progress.phase_total ?? progress.total ?? 1, progress.current ?? progress.phase_completed ?? 1));
+  if (progress.stage === "payments") {
+    return `Signing payment ${current}/${progress.phase_total} · ${percent}%`;
+  }
+  if (progress.stage === "polling") {
+    return `Signing later requests ${current}/${progress.phase_total} · ${percent}%`;
+  }
+  if (progress.stage === "submitting") {
+    return "Submitting approval · 100%";
+  }
+  return `Signing · ${percent}%`;
+}
+
+function setApprovalProgress(progress) {
+  state.approvalProgress = progress;
+  renderApprovalState();
+  if (progress) {
+    setStatus(approvalProgressText(progress));
+  }
 }
 
 function emptyRow() {
@@ -628,7 +673,10 @@ async function approveBundle() {
     return;
   }
 
+  state.approvalBusy = true;
+  state.approvalProgress = null;
   els.approveButton.disabled = true;
+  setApprovalProgress({ stage: "webauthn", message: "Confirm WebAuthn", percent: 0 });
   setResult(null);
   setStatus("Waiting for biometric approval");
   writeOutput("");
@@ -651,12 +699,15 @@ async function approveBundle() {
   });
 
   setStatus("Signing payment inputs");
+  setApprovalProgress({ stage: "preparing", message: "Preparing signatures", percent: 0 });
   const signatures = await signInWorker({
     phoneSharePackage: state.phoneSharePackage,
-    paymentInputs: state.bundle.payment_inputs
+    paymentInputs: state.bundle.payment_inputs,
+    onProgress: setApprovalProgress
   });
 
   state.signatures = signatures;
+  setApprovalProgress({ stage: "submitting", message: "Submitting approval", percent: 100 });
   const approval = {
     version: "bundle_approval_v1",
     bundle_id: state.bundle.bundle_id,
@@ -689,6 +740,8 @@ async function approveBundle() {
         note: "This bundle was already approved."
       }));
       setStatus("Bundle already approved", "warning");
+      state.approvalBusy = false;
+      state.approvalProgress = null;
       renderApprovalState();
       return;
     }
@@ -732,6 +785,8 @@ async function approveBundle() {
     timing: summarizeDurations(signatures)
   }));
   setStatus("Bundle approved");
+  state.approvalBusy = false;
+  state.approvalProgress = null;
   renderApprovalState();
 }
 
@@ -759,7 +814,7 @@ function percentile(values, p) {
   return Math.round(values[index]);
 }
 
-function signInWorker({ phoneSharePackage, paymentInputs }) {
+function signInWorker({ phoneSharePackage, paymentInputs, onProgress }) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("../../prod/src/sign-worker.js", import.meta.url), { type: "module" });
     worker.addEventListener("message", (event) => {
@@ -767,6 +822,9 @@ function signInWorker({ phoneSharePackage, paymentInputs }) {
       if (message.type === "done") {
         worker.terminate();
         resolve(message.signatures);
+      }
+      if (message.type === "progress") {
+        onProgress?.(message.progress);
       }
       if (message.type === "error") {
         worker.terminate();
@@ -796,6 +854,8 @@ async function init() {
     setStatus(error.message, "error");
   }));
   els.approveButton.addEventListener("click", () => approveBundle().catch((error) => {
+    state.approvalBusy = false;
+    state.approvalProgress = null;
     setStatus(error.message, "error");
     renderApprovalState();
   }));

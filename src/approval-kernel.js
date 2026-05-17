@@ -31,7 +31,7 @@ function approvalMetadata({ bundle, phoneSharePackage, webauthnCredential }) {
   };
 }
 
-async function signInVerifiedWorker({ integrityManifest, phoneSharePackage, bundle, approvedAt }) {
+async function signInVerifiedWorker({ integrityManifest, phoneSharePackage, bundle, approvedAt, onProgress }) {
   await assertResourcesIntegrity(integrityManifest, SIGN_WORKER_GRAPH);
 
   return new Promise((resolve, reject) => {
@@ -44,6 +44,8 @@ async function signInVerifiedWorker({ integrityManifest, phoneSharePackage, bund
           paymentSignatures: message.paymentSignatures,
           pollingCapabilityPackage: message.pollingCapabilityPackage
         });
+      } else if (message.type === "progress") {
+        onProgress?.(message.progress);
       } else if (message.type === "error") {
         worker.terminate();
         reject(new Error(message.message));
@@ -65,7 +67,8 @@ export async function approveReviewedBundle({
   integrityManifest,
   signal,
   isCancelled = () => false,
-  onStatus = () => {}
+  onStatus = () => {},
+  onProgress = () => {}
 }) {
   if (!phoneSharePackage || !webauthnCredential || !backendOrigin || !bundle) {
     throw new Error("approval kernel requires enrollment and a bundle");
@@ -79,6 +82,7 @@ export async function approveReviewedBundle({
   await validateBundleForApprovalV1(bundle);
   const metadata = approvalMetadata({ bundle, phoneSharePackage, webauthnCredential });
   onStatus("Waiting for biometric approval");
+  onProgress({ stage: "webauthn", message: "Confirm WebAuthn", percent: 0 });
   const assertion = await requestApprovalAssertion({
     credentialId: webauthnCredential.credential_id,
     challengeBytes: await webauthnApprovalChallengeV1(metadata)
@@ -87,14 +91,17 @@ export async function approveReviewedBundle({
 
   const approvedAt = new Date().toISOString();
   onStatus("Signing payment inputs and status polling requests");
+  onProgress({ stage: "preparing", message: "Preparing signatures", percent: 0 });
   const { paymentSignatures, pollingCapabilityPackage } = await signInVerifiedWorker({
     integrityManifest,
     phoneSharePackage,
     bundle,
-    approvedAt
+    approvedAt,
+    onProgress
   });
   assertActive();
 
+  onProgress({ stage: "submitting", message: "Submitting approval", percent: 100 });
   return submitBundleApproval({
     version: "bundle_approval_v1",
     ...metadata,

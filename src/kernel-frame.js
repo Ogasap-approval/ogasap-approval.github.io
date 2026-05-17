@@ -24,6 +24,7 @@ const state = {
   lastApprovalResult: null,
   approvedBundleIds: new Set(),
   busy: false,
+  approvalProgress: null,
   lockEpoch: 0,
   approvalAbortController: null
 };
@@ -108,10 +109,53 @@ function currentBundleApproved() {
   return Boolean(state.bundle && state.approvedBundleIds.has(state.bundle.bundle_id));
 }
 
+function boundedPercent(progress) {
+  const value = Number(progress?.percent ?? 0);
+  return Math.max(0, Math.min(100, Number.isFinite(value) ? Math.round(value) : 0));
+}
+
+function approvalProgressText(progress) {
+  if (!progress) {
+    return "Approve";
+  }
+  if (progress.message) {
+    return progress.message;
+  }
+  const percent = boundedPercent(progress);
+  const current = Math.max(1, Math.min(progress.phase_total ?? progress.total ?? 1, progress.current ?? progress.phase_completed ?? 1));
+  if (progress.stage === "payments") {
+    return `Signing payment ${current}/${progress.phase_total} · ${percent}%`;
+  }
+  if (progress.stage === "polling") {
+    return `Signing later requests ${current}/${progress.phase_total} · ${percent}%`;
+  }
+  if (progress.stage === "submitting") {
+    return "Submitting approval · 100%";
+  }
+  return `Signing · ${percent}%`;
+}
+
+function setApprovalProgress(progress) {
+  state.approvalProgress = progress;
+  setButtonState();
+  if (progress) {
+    setStatus(approvalProgressText(progress));
+  }
+}
+
 function setButtonState() {
   const approved = currentBundleApproved();
+  const showProgress = state.busy && !approved && state.approvalProgress;
+  els.approveButton.classList.toggle("approve-button-progress", Boolean(showProgress));
+  if (showProgress) {
+    els.approveButton.style.setProperty("--approval-progress", `${boundedPercent(state.approvalProgress)}%`);
+    els.approveButton.title = approvalProgressText(state.approvalProgress);
+  } else {
+    els.approveButton.style.removeProperty("--approval-progress");
+    els.approveButton.title = "";
+  }
   els.approveButton.disabled = state.busy || approved || !state.phoneSharePackage || !state.webauthnCredential || !state.backendOrigin || !state.bundle;
-  els.approveButton.textContent = approved ? "Approved" : "Approve";
+  els.approveButton.textContent = approved ? "Approved" : showProgress ? approvalProgressText(state.approvalProgress) : "Approve";
 }
 
 function emptyRow(text = "-") {
@@ -206,11 +250,13 @@ async function approveBundle() {
   }
 
   state.busy = true;
+  state.approvalProgress = null;
   const lockEpoch = state.lockEpoch;
   const approvalAbortController = new AbortController();
   state.approvalAbortController = approvalAbortController;
   state.lastApprovalResult = null;
   setButtonState();
+  setApprovalProgress({ stage: "webauthn", message: "Confirm WebAuthn", percent: 0 });
   setResult(null);
   post("started");
 
@@ -223,7 +269,8 @@ async function approveBundle() {
       integrityManifest: state.integrityManifest,
       signal: approvalAbortController.signal,
       isCancelled: () => lockEpoch !== state.lockEpoch || !state.phoneSharePackage,
-      onStatus: setStatus
+      onStatus: setStatus,
+      onProgress: setApprovalProgress
     });
     const approvalDetail = [totalText(state.bundle.totals) || result?.bundle_id || state.bundle.bundle_id, bankSubmissionText(result?.bank_submission)]
       .filter(Boolean)
@@ -280,6 +327,7 @@ async function approveBundle() {
       state.approvalAbortController = null;
     }
     state.busy = false;
+    state.approvalProgress = null;
     setButtonState();
     reportHeight();
   }

@@ -3,7 +3,8 @@ import { signBankPaymentInputV1 } from "./core/protocol/signing.js";
 export async function signPaymentInputsForBundle({
   phoneSharePackage,
   paymentInputs,
-  cryptoProvider = globalThis.crypto
+  cryptoProvider = globalThis.crypto,
+  onProgress = () => {}
 }) {
   if (!phoneSharePackage) {
     throw new Error("phone share package is required");
@@ -15,6 +16,12 @@ export async function signPaymentInputsForBundle({
   const signatures = [];
   for (let index = 0; index < paymentInputs.length; index += 1) {
     const input = paymentInputs[index];
+    onProgress({
+      stage: "payments",
+      current: index + 1,
+      completed: index,
+      total: paymentInputs.length
+    });
     const startedAt = globalThis.performance?.now?.() ?? Date.now();
     const signed = await signBankPaymentInputV1(input, phoneSharePackage, {
       cryptoProvider
@@ -25,6 +32,12 @@ export async function signPaymentInputsForBundle({
       request_id: input.request_id,
       sign_share_base64url: signed.sign_share_base64url,
       duration_ms: durationMS
+    });
+    onProgress({
+      stage: "payments",
+      current: index + 1,
+      completed: index + 1,
+      total: paymentInputs.length
     });
   }
 

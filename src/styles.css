@@ -51,6 +51,21 @@ button:disabled {
   opacity: 0.45;
 }
 
+button.approve-button-progress,
+button.approve-button-progress:disabled {
+  opacity: 1;
+  color: #fff;
+  background:
+    linear-gradient(
+      90deg,
+      var(--accent-strong) 0 var(--approval-progress, 0%),
+      var(--accent) var(--approval-progress, 0%) 100%
+    );
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 input[type="url"] {
   width: 100%;
   min-height: 38px;
@@ -498,7 +513,7 @@ dt {
   gap: 8px;
   justify-items: end;
   margin-left: auto;
-  min-width: 180px;
+  min-width: min(100%, 260px);
 }
 
 .metadata-list {
