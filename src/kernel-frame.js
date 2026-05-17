@@ -110,7 +110,7 @@ function currentBundleApproved() {
 }
 
 function boundedPercent(progress) {
-  const value = Number(progress?.percent ?? 0);
+  const value = Number(progress?.phase_percent ?? progress?.percent ?? progress?.overall_percent ?? 0);
   return Math.max(0, Math.min(100, Number.isFinite(value) ? Math.round(value) : 0));
 }
 

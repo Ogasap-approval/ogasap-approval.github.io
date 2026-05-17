@@ -460,7 +460,7 @@ function currentBundleApproved() {
 }
 
 function boundedPercent(progress) {
-  const value = Number(progress?.percent ?? 0);
+  const value = Number(progress?.phase_percent ?? progress?.percent ?? progress?.overall_percent ?? 0);
   return Math.max(0, Math.min(100, Number.isFinite(value) ? Math.round(value) : 0));
 }
 
@@ -865,7 +865,7 @@ async function init() {
   });
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./service-worker.js?v=signing-progress-v33").catch(() => {});
+    navigator.serviceWorker.register("./service-worker.js?v=approval-speed-v34").catch(() => {});
   }
 
   let persistent = await isStoragePersisted().catch(() => false);

@@ -5,6 +5,8 @@ import {
   buildPollingCapabilityInputsV1
 } from "./polling-capabilities.js";
 
+const POLLING_PROGRESS_STEP = 10;
+
 export async function signBundleBankInputs({
   phoneSharePackage,
   bundle,
@@ -12,13 +14,8 @@ export async function signBundleBankInputs({
   cryptoProvider = globalThis.crypto,
   onProgress = () => {}
 }) {
-  const pollingPackageInput = buildPollingCapabilityInputsV1({
-    bundle,
-    createdAt: approvedAt
-  });
   const paymentCount = bundle.payment_inputs.length;
-  const pollingCount = pollingPackageInput.requests.length;
-  const totalCount = paymentCount + pollingCount;
+  let totalCount = paymentCount;
   const emitProgress = ({ stage, current, completed, total }) => {
     const overallCompleted = stage === "polling" ? paymentCount + completed : completed;
     onProgress({
@@ -28,7 +25,8 @@ export async function signBundleBankInputs({
       phase_total: total,
       completed: overallCompleted,
       total: totalCount,
-      percent: totalCount ? Math.round((overallCompleted / totalCount) * 100) : 0
+      phase_percent: total ? Math.round((completed / total) * 100) : 0,
+      overall_percent: totalCount ? Math.round((overallCompleted / totalCount) * 100) : 0
     });
   };
 
@@ -38,15 +36,23 @@ export async function signBundleBankInputs({
     cryptoProvider,
     onProgress: emitProgress
   });
+  const pollingPackageInput = buildPollingCapabilityInputsV1({
+    bundle,
+    createdAt: approvedAt
+  });
+  const pollingCount = pollingPackageInput.requests.length;
+  totalCount = paymentCount + pollingCount;
   const pollingSignatures = [];
   for (const input of pollingPackageInput.requests) {
     const index = pollingSignatures.length;
-    emitProgress({
-      stage: "polling",
-      current: index + 1,
-      completed: index,
-      total: pollingCount
-    });
+    if (index === 0 || index % POLLING_PROGRESS_STEP === 0) {
+      emitProgress({
+        stage: "polling",
+        current: index + 1,
+        completed: index,
+        total: pollingCount
+      });
+    }
     const signed = await signBankReadInputV1(input, phoneSharePackage, {
       cryptoProvider
     });
@@ -54,12 +60,14 @@ export async function signBundleBankInputs({
       request_id: input.request_id,
       sign_share_base64url: signed.sign_share_base64url
     });
-    emitProgress({
-      stage: "polling",
-      current: index + 1,
-      completed: index + 1,
-      total: pollingCount
-    });
+    if (index + 1 === pollingCount || (index + 1) % POLLING_PROGRESS_STEP === 0) {
+      emitProgress({
+        stage: "polling",
+        current: index + 1,
+        completed: index + 1,
+        total: pollingCount
+      });
+    }
   }
   onProgress({
     stage: "submitting",
@@ -68,7 +76,8 @@ export async function signBundleBankInputs({
     phase_total: totalCount,
     completed: totalCount,
     total: totalCount,
-    percent: 100
+    phase_percent: 100,
+    overall_percent: 100
   });
 
   return {

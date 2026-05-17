@@ -23,7 +23,7 @@ import {
   randomPrfSaltBase64url,
   requestApprovalAssertion,
   requestPrfWrapKey
-} from "./webauthn.js?v=signing-progress-v55";
+} from "./webauthn.js?v=approval-speed-v56";
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
@@ -1346,7 +1346,7 @@ async function init() {
   });
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./service-worker.js?v=signing-progress-v55").catch(() => {});
+    navigator.serviceWorker.register("./service-worker.js?v=approval-speed-v56").catch(() => {});
   }
 
   let persistent = await isStoragePersisted().catch(() => false);
