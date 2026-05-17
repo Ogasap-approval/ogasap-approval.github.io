@@ -3,33 +3,47 @@ import { sha256Hex } from "../../prod/src/core/protocol/canonical.js";
 import { bundleCommitmentsForInputsV1 } from "../../prod/src/core/protocol/envelopes.js";
 
 function demoPaymentBody(index) {
-  const amountMinor = 12500 + index * 137;
+  const amountMinor = 25000 + index * 701;
+  const debtorAccount = DK_SANDBOX_ACCOUNTS[0];
+  const creditorAccount = DK_SANDBOX_ACCOUNTS[(index % (DK_SANDBOX_ACCOUNTS.length - 1)) + 1];
   return {
-    template_id: "SEPA_INSTANT_CREDIT_TRANSFER_FI",
+    template_id: "INSTANT_CREDIT_TRANSFER_DK",
     amount: amountMinorToDecimal(amountMinor),
-    currency: "EUR",
-    end_to_end_id: `demo-${String(index).padStart(3, "0")}`,
-    external_id: `demo-local-${String(index).padStart(3, "0")}-${randomToken()}`.slice(0, 64),
+    currency: "DKK",
+    end_to_end_id: `dk-${String(index).padStart(3, "0")}`,
+    external_id: `demo-local-dk-${String(index).padStart(3, "0")}-${randomToken()}`.slice(0, 64),
     debtor: {
       account: {
-        currency: "EUR",
-        type: "IBAN",
-        value: "FI4616603001014326"
+        currency: "DKK",
+        type: "BBAN",
+        value: debtorAccount.bban
       },
-      own_reference: `Demo payout ${String(index).padStart(3, "0")}`
+      own_reference: `DK payout ${String(index).padStart(3, "0")}`
     },
     creditor: {
-      name: `Demo Supplier ${String(index).padStart(3, "0")}`,
+      name: `DK Supplier ${String(index).padStart(3, "0")}`,
       account: {
-        type: "IBAN",
-        value: "FI1350001520000081"
+        type: "BBAN",
+        value: creditorAccount.bban
       },
-      reference: {
-        value: "RF18539007547034",
-        type: "RF"
-      }
+      bank: {
+        bank_code: creditorAccount.bankCode,
+        country: "DK"
+      },
+      message: `Invoice DK-${String(index).padStart(3, "0")}`
     }
   };
+}
+
+const DK_SANDBOX_ACCOUNTS = [
+  { bban: "20000216144198", bankCode: "2000", accountNumber: "0216144198" },
+  { bban: "20000808505894", bankCode: "2000", accountNumber: "0808505894" },
+  { bban: "20001544959502", bankCode: "2000", accountNumber: "1544959502" },
+  { bban: "20005005538159", bankCode: "2000", accountNumber: "5005538159" }
+];
+
+function domesticAccountLabel(account) {
+  return `${account.bankCode} ${account.accountNumber}`;
 }
 
 function amountMinorToDecimal(amountMinor) {
@@ -80,11 +94,11 @@ async function createDemoBankSigningInput(index) {
     body_sha256: bodySha256,
     visible_payment: {
       creditor_name: body.creditor.name,
-      creditor_account: body.creditor.account.value,
-      debtor_account_masked: "FI46...4326",
-      amount_minor: String(12500 + index * 137),
+      creditor_account: domesticAccountLabel(DK_SANDBOX_ACCOUNTS[(index % (DK_SANDBOX_ACCOUNTS.length - 1)) + 1]),
+      debtor_account_masked: "2000...4198",
+      amount_minor: String(25000 + index * 701),
       currency: body.currency,
-      remittance_text: body.creditor.reference.value
+      remittance_text: body.creditor.message
     }
   };
 }
@@ -96,7 +110,7 @@ export async function createFreshDemoBundle(count = 3) {
     paymentInputs.push(await createDemoBankSigningInput(index));
   }
 
-  const bundleId = `demo-bundle-${boundedCount}-${randomToken()}`;
+  const bundleId = `demo-bundle-${boundedCount}-dk-${randomToken()}`;
   const version = "demo_bundle_v1";
   const commitments = await bundleCommitmentsForInputsV1({
     bundleId,

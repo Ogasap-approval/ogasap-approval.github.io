@@ -320,6 +320,21 @@ export function normalizeVisiblePaymentV1(payment) {
   };
 }
 
+function domesticAccountDisplay(account, bank) {
+  const value = account?.value ?? account;
+  if (
+    account?.type === "BBAN" &&
+    typeof value === "string" &&
+    /^[0-9]{14}$/u.test(value) &&
+    (bank?.country === "DK" || bank?.bank_code)
+  ) {
+    const bankCode = typeof bank?.bank_code === "string" && bank.bank_code ? bank.bank_code : value.slice(0, 4);
+    const accountNumber = value.startsWith(bankCode) ? value.slice(bankCode.length) : value.slice(4);
+    return `${bankCode} ${accountNumber}`;
+  }
+  return value;
+}
+
 export function deriveVisiblePaymentFromBankBodyV1(bodyBytes) {
   let body;
   try {
@@ -330,11 +345,11 @@ export function deriveVisiblePaymentFromBankBodyV1(bodyBytes) {
 
   return normalizeVisiblePaymentV1({
     creditor_name: body.creditor?.name,
-    creditor_account: body.creditor?.account?.value ?? body.creditor?.account,
+    creditor_account: domesticAccountDisplay(body.creditor?.account, body.creditor?.bank),
     debtor_account_masked: body.debtor?.account_masked ?? maskAccount(body.debtor?.account?.value),
     amount_minor: body.amount?.minor !== undefined ? String(body.amount.minor) : decimalAmountToMinor(body.amount),
     currency: body.amount?.currency ?? body.currency,
-    remittance_text: body.remittance_text ?? body.creditor?.reference?.value ?? body.end_to_end_id ?? ""
+    remittance_text: body.remittance_text ?? body.creditor?.message ?? body.creditor?.reference?.value ?? body.end_to_end_id ?? ""
   });
 }
 

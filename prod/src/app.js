@@ -23,7 +23,7 @@ import {
   randomPrfSaltBase64url,
   requestApprovalAssertion,
   requestPrfWrapKey
-} from "./webauthn.js?v=history-time-v48";
+} from "./webauthn.js?v=history-time-v49";
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
