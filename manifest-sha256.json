@@ -9,7 +9,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "f7f79bf757b2075953e5bedc1f3fcca6ef4c8b79e02316b82ef3dce2415cf8b1"
+      "sha256": "be87e3154ede54b7a619a52a33cd6a016f1d9deaac36e661465daa23aa8e9c3f"
     },
     {
       "path": "kernel.html",
@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "4ceb656e4c4330916c9bac238417e95fe59b40dbd3ee92a448bae4bf7197deb9"
+      "sha256": "b4c4d7811f94963d25c99644df1f33ca90428ffe66c3f5e6637582ea7dc96409"
     },
     {
       "path": "src/api-client.js",
@@ -29,7 +29,7 @@
     },
     {
       "path": "src/app.js",
-      "sha256": "0ecaf484c49b563f7a2769f8cb147e2e4e5625ae6d21b5268d7354c7cbfef1c0"
+      "sha256": "e571b26eb682abeee21b176153ff64ea661f925e5c6a7d0259709d44876d84ad"
     },
     {
       "path": "src/approval-kernel.js",
@@ -73,7 +73,7 @@
     },
     {
       "path": "src/core/protocol/envelopes.js",
-      "sha256": "8337a23000499968144d4578b151090dec6ba35faa0a43b214375198bafc416d"
+      "sha256": "4f3e037bfb9444241b729caac8225062b74895862158bc753de6333f510c036f"
     },
     {
       "path": "src/core/protocol/signing.js",
@@ -97,7 +97,7 @@
     },
     {
       "path": "src/polling-capabilities.js",
-      "sha256": "b46e3ffeb6643557abc687ddcd08a68cc5ae3c583ae5a231d98bfe876453b05c"
+      "sha256": "8395c0f5b95cc54bcfeb1420a157c56f2a1a0fd1b16e69f9d83d9db64118ae4f"
     },
     {
       "path": "src/sign-worker.js",

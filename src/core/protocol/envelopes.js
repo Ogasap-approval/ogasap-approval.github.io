@@ -387,13 +387,14 @@ export function normalizeVisiblePaymentV1(payment) {
   };
 }
 
-function domesticAccountDisplay(account, bank) {
+function domesticAccountDisplay(account, bank, body) {
   const value = account?.value ?? account;
+  const templateId = typeof body?.template_id === "string" ? body.template_id : "";
   if (
     account?.type === "BBAN" &&
     typeof value === "string" &&
     /^[0-9]{14}$/u.test(value) &&
-    (bank?.country === "DK" || bank?.bank_code)
+    (bank?.country === "DK" || bank?.bank_code || templateId.endsWith("_DK") || body?.currency === "DKK")
   ) {
     const bankCode = typeof bank?.bank_code === "string" && bank.bank_code ? bank.bank_code : value.slice(0, 4);
     const accountNumber = value.startsWith(bankCode) ? value.slice(bankCode.length) : value.slice(4);
@@ -412,7 +413,7 @@ export function deriveVisiblePaymentFromBankBodyV1(bodyBytes) {
 
   return normalizeVisiblePaymentV1({
     creditor_name: body.creditor?.name,
-    creditor_account: domesticAccountDisplay(body.creditor?.account, body.creditor?.bank),
+    creditor_account: domesticAccountDisplay(body.creditor?.account, body.creditor?.bank, body),
     debtor_account_masked: body.debtor?.account_masked ?? maskAccount(body.debtor?.account?.value),
     amount_minor: body.amount?.minor !== undefined ? String(body.amount.minor) : decimalAmountToMinor(body.amount),
     currency: body.amount?.currency ?? body.currency,
