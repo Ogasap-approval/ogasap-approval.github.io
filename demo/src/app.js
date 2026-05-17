@@ -150,6 +150,9 @@ function bankSubmissionText(submission) {
   if (submission.status === "submitted") {
     return "Bank submitted";
   }
+  if (submission.status === "auth_expired") {
+    return "Bank auth expired";
+  }
   if (submission.status === "failed") {
     return "Bank failed";
   }
@@ -157,6 +160,9 @@ function bankSubmissionText(submission) {
 }
 
 function bankPaymentStatusText(payment) {
+  if (payment.bank_status === "auth_expired" || payment.bank_error === "bank_access_token_expired") {
+    return "Bank auth expired";
+  }
   if (payment.bank_error) {
     return `Bank failed: ${payment.bank_error}`;
   }
@@ -887,7 +893,7 @@ async function init() {
   });
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./service-worker.js?v=two-line-eta-v41").catch(() => {});
+    navigator.serviceWorker.register("./service-worker.js?v=auth-expired-v42").catch(() => {});
   }
 
   let persistent = await isStoragePersisted().catch(() => false);

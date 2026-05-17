@@ -68,6 +68,9 @@ function bankSubmissionText(submission) {
   if (submission.status === "submitted") {
     return "submitted to bank";
   }
+  if (submission.status === "auth_expired") {
+    return "bank auth expired";
+  }
   if (submission.status === "failed") {
     return `Bank submission failed${submission.error ? `: ${submission.error}` : ""}`;
   }
