@@ -8,6 +8,7 @@ import {
   canonicalBackendAuthEnvelopeV1,
   canonicalBackendResponseEnvelopeV1,
   canonicalBundleApprovalEnvelopeV1,
+  paddedBankReadSigningDigestV1,
   paddedBankSigningDigestV1
 } from "./envelopes.js";
 
@@ -173,6 +174,32 @@ export async function signBankPaymentInputV1(bankInput, phoneSharePackage, optio
   assertNoProductionBlindingOverride(options);
   const share = decodePhoneSharePackageV1(phoneSharePackage);
   const paddedDigest = await paddedBankSigningDigestV1(
+    bankInput,
+    modulusByteLength(share.modulus),
+    options.cryptoProvider
+  );
+  const signShare = signShareForPaddedDigest({
+    paddedDigest,
+    modulus: share.modulus,
+    shareSi: share.shareSi,
+    shareIndex: share.shareIndex,
+    players: share.players,
+    threshold: share.threshold,
+    blinded: true,
+    cryptoProvider: options.cryptoProvider
+  });
+
+  return {
+    padded_digest: paddedDigest,
+    sign_share: signShare,
+    sign_share_base64url: bytesToBase64url(signShare)
+  };
+}
+
+export async function signBankReadInputV1(bankInput, phoneSharePackage, options = {}) {
+  assertNoProductionBlindingOverride(options);
+  const share = decodePhoneSharePackageV1(phoneSharePackage);
+  const paddedDigest = await paddedBankReadSigningDigestV1(
     bankInput,
     modulusByteLength(share.modulus),
     options.cryptoProvider

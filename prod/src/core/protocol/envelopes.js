@@ -15,6 +15,9 @@ const NO_LINE_BREAKS = /^[^\r\n]*$/u;
 const MAX_BUNDLE_PAYMENTS = 200;
 const MAX_BODY_BASE64URL_LENGTH = 350000;
 const BANK_SIGNED_HEADER_COUNT = 5;
+const BANK_READ_SIGNED_HEADER_COUNT = 3;
+const MAX_POLLING_CAPABILITY_REQUESTS = 2500;
+const MAX_POLLING_EXTERNAL_IDS = 20;
 const ORIGINATING_HOST_HEADER = /^x-[a-z0-9-]+-originating-host$/u;
 const ORIGINATING_DATE_HEADER = /^x-[a-z0-9-]+-originating-date$/u;
 
@@ -226,6 +229,20 @@ function assertBankSigningInputShapeV1(input) {
   normalizeVisiblePaymentV1(input.visible_payment);
 }
 
+function assertBankReadSigningInputShapeV1(input) {
+  if (input?.version !== "bank_read_signing_input_v1") {
+    throw new RangeError("Bank read signing input version must be bank_read_signing_input_v1");
+  }
+  assertPattern("request_id", input.request_id, ID_8_128);
+  if (input.method !== "GET") {
+    throw new RangeError("Bank read v1 signing input supports GET only");
+  }
+  if (!input.path?.startsWith("/corporate/")) {
+    throw new RangeError("Bank read path must be a corporate API path");
+  }
+  assertNoLineBreaks("Bank read path", input.path, 2048);
+}
+
 function validateBankSignedHeadersV1(headers, bodySha256) {
   if (!Array.isArray(headers) || headers.length !== BANK_SIGNED_HEADER_COUNT) {
     throw new RangeError(`signed_headers must contain exactly ${BANK_SIGNED_HEADER_COUNT} headers`);
@@ -277,6 +294,44 @@ function validateBankSignedHeadersV1(headers, bodySha256) {
   });
 }
 
+function validateBankReadSignedHeadersV1(headers) {
+  if (!Array.isArray(headers) || headers.length !== BANK_READ_SIGNED_HEADER_COUNT) {
+    throw new RangeError(`read signed_headers must contain exactly ${BANK_READ_SIGNED_HEADER_COUNT} headers`);
+  }
+
+  const seen = new Set();
+  return headers.map((header, index) => {
+    if (!header || typeof header !== "object") {
+      throw new RangeError("read signed_headers entries must be objects");
+    }
+    const { name, value } = header;
+    if (seen.has(name)) {
+      throw new RangeError(`duplicate read signed header ${name}`);
+    }
+    seen.add(name);
+    if (!PRINTABLE_ASCII.test(name)) {
+      throw new RangeError("read signed header names must be printable ASCII");
+    }
+    if (index === 0 && name !== "(request-target)") {
+      throw new RangeError("read signed header 1 must be (request-target)");
+    }
+    if (index === 1 && !ORIGINATING_HOST_HEADER.test(name)) {
+      throw new RangeError("read signed header 2 must be an originating host header");
+    }
+    if (index === 2 && !ORIGINATING_DATE_HEADER.test(name)) {
+      throw new RangeError("read signed header 3 must be an originating date header");
+    }
+    if (name === "(request-target)") {
+      if (value !== "") {
+        throw new RangeError("(request-target) read signed header value must be empty");
+      }
+    } else {
+      assertPrintableHeaderValue(`read signed header ${name}`, value);
+    }
+    return { name, value };
+  });
+}
+
 export function bankHttpSigningStringV1(input) {
   assertBankSigningInputShapeV1(input);
   const headers = validateBankSignedHeadersV1(input.signed_headers, input.body_sha256);
@@ -288,6 +343,18 @@ export function bankHttpSigningStringV1(input) {
     return `${name}: ${value}`;
   });
   return lines.join("\n");
+}
+
+export function bankReadHttpSigningStringV1(input) {
+  assertBankReadSigningInputShapeV1(input);
+  const headers = validateBankReadSignedHeadersV1(input.signed_headers);
+
+  return headers.map(({ name, value }) => {
+    if (name === "(request-target)") {
+      return `(request-target): ${input.method.toLowerCase()} ${input.path}`;
+    }
+    return `${name}: ${value}`;
+  }).join("\n");
 }
 
 export function normalizeVisiblePaymentV1(payment) {
@@ -565,4 +632,67 @@ export function validateBundleApprovalEnvelopeInputV1(input) {
 export async function paddedBankSigningDigestV1(input, modulusByteLength, cryptoProvider = globalThis.crypto) {
   const { signingStringBytes } = await validateBankSigningInputV1(input, cryptoProvider);
   return emsaPkcs1v15Encode(signingStringBytes, modulusByteLength, cryptoProvider);
+}
+
+export function validateBankReadSigningInputV1(input) {
+  assertBankReadSigningInputShapeV1(input);
+  const signingString = bankReadHttpSigningStringV1(input);
+  return {
+    signingString,
+    signingStringBytes: utf8Encode(signingString)
+  };
+}
+
+export async function paddedBankReadSigningDigestV1(input, modulusByteLength, cryptoProvider = globalThis.crypto) {
+  const { signingStringBytes } = validateBankReadSigningInputV1(input);
+  return emsaPkcs1v15Encode(signingStringBytes, modulusByteLength, cryptoProvider);
+}
+
+export function validatePollingCapabilityPackageV1(pkg) {
+  if (pkg === undefined || pkg === null) {
+    return null;
+  }
+  if (pkg?.version !== "polling_capability_package_v1") {
+    throw new RangeError("polling capability package version must be polling_capability_package_v1");
+  }
+  assertPattern("polling bundle_id", pkg.bundle_id, ID_8_128);
+  assertDateTime("polling created_at", pkg.created_at);
+  assertDateTime("polling valid_until", pkg.valid_until);
+  if (pkg.slot_interval_minutes !== 30) {
+    throw new RangeError("polling slot_interval_minutes must be 30");
+  }
+  if (pkg.horizon_hours !== 76) {
+    throw new RangeError("polling horizon_hours must be 76");
+  }
+  if (!Array.isArray(pkg.requests) || pkg.requests.length > MAX_POLLING_CAPABILITY_REQUESTS) {
+    throw new RangeError(`polling requests must contain at most ${MAX_POLLING_CAPABILITY_REQUESTS} entries`);
+  }
+  for (const request of pkg.requests) {
+    validateBankReadSigningInputV1(request);
+    if (!["deterministic", "bundle_payment_status"].includes(request.scope)) {
+      throw new RangeError("polling request scope is invalid");
+    }
+    if (!Number.isInteger(request.slot_index) || request.slot_index < 0 || request.slot_index >= 152) {
+      throw new RangeError("polling request slot_index is invalid");
+    }
+    if (typeof request.phone_sign_share_base64url !== "string" || !BASE64URL.test(request.phone_sign_share_base64url)) {
+      throw new RangeError("polling request phone_sign_share_base64url is invalid");
+    }
+    if (request.scope === "bundle_payment_status") {
+      if (!Number.isInteger(request.chunk_index) || request.chunk_index < 0) {
+        throw new RangeError("polling payment chunk_index is invalid");
+      }
+      if (
+        !Array.isArray(request.external_ids) ||
+        request.external_ids.length < 1 ||
+        request.external_ids.length > MAX_POLLING_EXTERNAL_IDS
+      ) {
+        throw new RangeError("polling payment external_ids must contain 1..20 entries");
+      }
+      for (const externalId of request.external_ids) {
+        assertNoLineBreaks("polling external_id", externalId, 128);
+      }
+    }
+  }
+  return pkg;
 }

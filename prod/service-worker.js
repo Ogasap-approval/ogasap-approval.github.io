@@ -2,7 +2,7 @@
 // changes. The fetch handler is strict cache-first, so without a fresh CACHE_NAME
 // installed clients keep serving the previously cached copy indefinitely.
 // Enforced by tools/check-service-worker-cache.mjs in CI.
-const CACHE_NAME = "approval-approve-prod-v52";
+const CACHE_NAME = "approval-approve-prod-v53";
 const PRECACHE_URLS = [
   "./",
   "./index.html",
@@ -13,9 +13,11 @@ const PRECACHE_URLS = [
   "./src/api-client.js",
   "./src/app.js",
   "./src/approval-kernel.js",
+  "./src/bank-signing-batch.js",
   "./src/integrity.js",
   "./src/kernel-frame.js",
   "./src/payment-view.js",
+  "./src/polling-capabilities.js",
   "./src/sign-worker.js",
   "./src/signing-session.js",
   "./src/storage.js",

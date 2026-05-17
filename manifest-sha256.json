@@ -9,7 +9,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "8f030f3006667d7c3b6595217bb296cc1ad8162707e68d9df944dc67e9cc0fe1"
+      "sha256": "f7f79bf757b2075953e5bedc1f3fcca6ef4c8b79e02316b82ef3dce2415cf8b1"
     },
     {
       "path": "kernel.html",
@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "e50bfa687023da79e7d117b4d6bec9a664c381725b1b864e88575da88e0c52d5"
+      "sha256": "4ceb656e4c4330916c9bac238417e95fe59b40dbd3ee92a448bae4bf7197deb9"
     },
     {
       "path": "src/api-client.js",
@@ -29,15 +29,19 @@
     },
     {
       "path": "src/app.js",
-      "sha256": "0e5d30257dedaeae5ea0b80ff103c4cc8ee8013968f705db6db2df5d48647795"
+      "sha256": "0ecaf484c49b563f7a2769f8cb147e2e4e5625ae6d21b5268d7354c7cbfef1c0"
     },
     {
       "path": "src/approval-kernel.js",
-      "sha256": "6c4c0d54d6d77483009bc3750f94a6c8d414e611471cced8b4c800e7a4a2fca1"
+      "sha256": "9e693235467e69205c80c9656bcc63767cbac818601b39e5fa06005cf69dbf6a"
     },
     {
       "path": "src/assets/icon.svg",
       "sha256": "cf17f23b46ba0403b904fccc91e195b7503f8a38c5c679acf5c470bffe9a71cd"
+    },
+    {
+      "path": "src/bank-signing-batch.js",
+      "sha256": "1e588aa787a8d2e8ec4d3e495f073b40977f12e60c21f6f12c84f7aecea3c9a3"
     },
     {
       "path": "src/core/crypto/bigint.js",
@@ -69,11 +73,11 @@
     },
     {
       "path": "src/core/protocol/envelopes.js",
-      "sha256": "8e8dce3c3bc743c2675ff21271f9d81a83c2e0a283b70fd65dc9b079e5367309"
+      "sha256": "8337a23000499968144d4578b151090dec6ba35faa0a43b214375198bafc416d"
     },
     {
       "path": "src/core/protocol/signing.js",
-      "sha256": "660663d8a2d730c783937097f7db0000555b9065f30b6aa11edf6f0e6fc7d2d0"
+      "sha256": "aa6a5984c8c2f97d98a507326ccebe72113ddf6b1be869fa6afa852a4867f7b3"
     },
     {
       "path": "src/force-update.js",
@@ -92,8 +96,12 @@
       "sha256": "9725fc1a1a71863c160c9b3144382d560df4d7f6de7009f3031c20ce4aa5428f"
     },
     {
+      "path": "src/polling-capabilities.js",
+      "sha256": "b46e3ffeb6643557abc687ddcd08a68cc5ae3c583ae5a231d98bfe876453b05c"
+    },
+    {
       "path": "src/sign-worker.js",
-      "sha256": "c72c434acf6c5fcc0f0a211294919a233e8e3f6c3be023949960854643a84faa"
+      "sha256": "e0864485b396b789b4e489bd613e722295727b130eed5b0cbb229e6a4224e0df"
     },
     {
       "path": "src/signing-session.js",

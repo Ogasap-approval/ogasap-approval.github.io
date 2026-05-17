@@ -5,7 +5,9 @@ import { requestApprovalAssertion } from "./webauthn.js";
 
 const SIGN_WORKER_GRAPH = [
   "src/sign-worker.js",
+  "src/bank-signing-batch.js",
   "src/signing-session.js",
+  "src/polling-capabilities.js",
   "src/core/crypto/bigint.js",
   "src/core/crypto/bytes.js",
   "src/core/crypto/circl-signshare.js",
@@ -29,7 +31,7 @@ function approvalMetadata({ bundle, phoneSharePackage, webauthnCredential }) {
   };
 }
 
-async function signInVerifiedWorker({ integrityManifest, phoneSharePackage, paymentInputs }) {
+async function signInVerifiedWorker({ integrityManifest, phoneSharePackage, bundle, approvedAt }) {
   await assertResourcesIntegrity(integrityManifest, SIGN_WORKER_GRAPH);
 
   return new Promise((resolve, reject) => {
@@ -38,7 +40,10 @@ async function signInVerifiedWorker({ integrityManifest, phoneSharePackage, paym
       const message = event.data;
       if (message.type === "done") {
         worker.terminate();
-        resolve(message.signatures);
+        resolve({
+          paymentSignatures: message.paymentSignatures,
+          pollingCapabilityPackage: message.pollingCapabilityPackage
+        });
       } else if (message.type === "error") {
         worker.terminate();
         reject(new Error(message.message));
@@ -48,7 +53,7 @@ async function signInVerifiedWorker({ integrityManifest, phoneSharePackage, paym
       worker.terminate();
       reject(new Error(event.message));
     });
-    worker.postMessage({ phoneSharePackage, paymentInputs });
+    worker.postMessage({ phoneSharePackage, bundle, approvedAt });
   });
 }
 
@@ -80,11 +85,13 @@ export async function approveReviewedBundle({
   });
   assertActive();
 
-  onStatus("Signing payment inputs");
-  const signatures = await signInVerifiedWorker({
+  const approvedAt = new Date().toISOString();
+  onStatus("Signing payment inputs and status polling requests");
+  const { paymentSignatures, pollingCapabilityPackage } = await signInVerifiedWorker({
     integrityManifest,
     phoneSharePackage,
-    paymentInputs: bundle.payment_inputs
+    bundle,
+    approvedAt
   });
   assertActive();
 
@@ -95,7 +102,8 @@ export async function approveReviewedBundle({
     bank_request_hashes: bundle.bank_request_hashes,
     visible_line_item_hashes: bundle.visible_line_item_hashes,
     webauthn_assertion: assertion,
-    phone_sign_shares: signatures.map((signature) => signature.sign_share_base64url),
-    approved_at: new Date().toISOString()
+    phone_sign_shares: paymentSignatures.map((signature) => signature.sign_share_base64url),
+    polling_capability_package: pollingCapabilityPackage,
+    approved_at: approvedAt
   }, phoneSharePackage, backendOrigin, { signal });
 }
