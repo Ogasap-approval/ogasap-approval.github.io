@@ -11,6 +11,7 @@ import {
 } from "../../prod/src/storage.js";
 import { createApprovalCredential, isWebAuthnAvailable, requestApprovalAssertion } from "../../prod/src/webauthn.js";
 import { validateBundleForApprovalV1, webauthnApprovalChallengeV1 } from "../../prod/src/core/protocol/envelopes.js";
+import { signPaymentInputsForBundleParallel } from "../../prod/src/signing-worker-pool.js";
 
 const RESET_CONFIRM_MS = 10000;
 
@@ -818,27 +819,10 @@ function percentile(values, p) {
 }
 
 function signInWorker({ phoneSharePackage, paymentInputs, onProgress }) {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL("../../prod/src/sign-worker.js", import.meta.url), { type: "module" });
-    worker.addEventListener("message", (event) => {
-      const message = event.data;
-      if (message.type === "done") {
-        worker.terminate();
-        resolve(message.signatures);
-      }
-      if (message.type === "progress") {
-        onProgress?.(message.progress);
-      }
-      if (message.type === "error") {
-        worker.terminate();
-        reject(new Error(message.message));
-      }
-    });
-    worker.addEventListener("error", (event) => {
-      worker.terminate();
-      reject(new Error(event.message));
-    });
-    worker.postMessage({ phoneSharePackage, paymentInputs });
+  return signPaymentInputsForBundleParallel({
+    phoneSharePackage,
+    paymentInputs,
+    onProgress
   });
 }
 
@@ -868,7 +852,7 @@ async function init() {
   });
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./service-worker.js?v=worker-progress-v38").catch(() => {});
+    navigator.serviceWorker.register("./service-worker.js?v=direct-workers-v39").catch(() => {});
   }
 
   let persistent = await isStoragePersisted().catch(() => false);

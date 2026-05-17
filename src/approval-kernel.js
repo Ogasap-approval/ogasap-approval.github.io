@@ -1,10 +1,10 @@
 import { submitBundleApproval } from "./api-client.js";
 import { assertResourcesIntegrity } from "./integrity.js";
+import { signBundleBankInputs } from "./bank-signing-batch.js";
 import { validateBundleForApprovalV1, webauthnApprovalChallengeV1 } from "./core/protocol/envelopes.js";
 import { requestApprovalAssertion } from "./webauthn.js";
 
 const SIGN_WORKER_GRAPH = [
-  "src/sign-worker.js",
   "src/sign-task-worker.js",
   "src/bank-signing-batch.js",
   "src/signing-worker-pool.js",
@@ -36,28 +36,11 @@ function approvalMetadata({ bundle, phoneSharePackage, webauthnCredential }) {
 async function signInVerifiedWorker({ integrityManifest, phoneSharePackage, bundle, approvedAt, onProgress }) {
   await assertResourcesIntegrity(integrityManifest, SIGN_WORKER_GRAPH);
 
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL("./sign-worker.js", import.meta.url), { type: "module" });
-    worker.addEventListener("message", (event) => {
-      const message = event.data;
-      if (message.type === "done") {
-        worker.terminate();
-        resolve({
-          paymentSignatures: message.paymentSignatures,
-          pollingCapabilityPackage: message.pollingCapabilityPackage
-        });
-      } else if (message.type === "progress") {
-        onProgress?.(message.progress);
-      } else if (message.type === "error") {
-        worker.terminate();
-        reject(new Error(message.message));
-      }
-    });
-    worker.addEventListener("error", (event) => {
-      worker.terminate();
-      reject(new Error(event.message));
-    });
-    worker.postMessage({ phoneSharePackage, bundle, approvedAt });
+  return signBundleBankInputs({
+    phoneSharePackage,
+    bundle,
+    approvedAt,
+    onProgress
   });
 }
 

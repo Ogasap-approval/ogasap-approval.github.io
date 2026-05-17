@@ -9,7 +9,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "fbd7053a8895cc37f03f70a0418c03a010430719457bb9032e095be125d21e49"
+      "sha256": "bb814f9594a4d444faca130b3c30e6b9edc22d266f33bc7f60f50200795b0f47"
     },
     {
       "path": "kernel.html",
@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "b9eab15b6bd3c3242c4685fcc66574eb423a1cdea044a32615cac732a1301032"
+      "sha256": "59f8a87b8b7d4646eae5817b0066110ca8853f084767d2cc9b2560686a9e42ea"
     },
     {
       "path": "src/api-client.js",
@@ -29,11 +29,11 @@
     },
     {
       "path": "src/app.js",
-      "sha256": "8ceb458423c8893946f53a9e58e028cc7308c44ada292bc3fdac9a300407097f"
+      "sha256": "774f8e1e164fb253dddce222149082c9c784f97c8e62edfe2355787d38326df4"
     },
     {
       "path": "src/approval-kernel.js",
-      "sha256": "3811b15ec3ee0abc247fa47b8063703ecd96b8f9954c96a9666584ffcef8cda5"
+      "sha256": "8e37cc1be953ba8e9f69edbe3752d4a41389e4c35ed19ce5e34a2f0d8e8f32e1"
     },
     {
       "path": "src/assets/icon.svg",
@@ -41,7 +41,7 @@
     },
     {
       "path": "src/bank-signing-batch.js",
-      "sha256": "bf78fcf2e70adec32d514357f2bdd85373dbf203d2b296faf19435d41726258e"
+      "sha256": "a389f2610909e11f2f06f282bfa8482e997ccfa4c4370c3af081b33176166c28"
     },
     {
       "path": "src/core/crypto/bigint.js",
@@ -102,10 +102,6 @@
     {
       "path": "src/sign-task-worker.js",
       "sha256": "5a5ce33851f94fc6e576f6183938390707372aa2dd89b31b3de47e4b449402fc"
-    },
-    {
-      "path": "src/sign-worker.js",
-      "sha256": "ac9b1cfd17926898133cd202ea21e184f1fc689ff8b53845e3bfcee0c5f87253"
     },
     {
       "path": "src/signing-session.js",

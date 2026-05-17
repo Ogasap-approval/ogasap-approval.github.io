@@ -17,7 +17,7 @@ export async function signBundleBankInputs({
 }) {
   const paymentCount = bundle.payment_inputs.length;
   let totalCount = paymentCount;
-  const emitProgress = ({ stage, current, completed, total }) => {
+  const emitProgress = ({ stage, current, completed, total, worker_count }) => {
     const overallCompleted = stage === "polling" ? paymentCount + completed : completed;
     onProgress({
       stage,
@@ -26,6 +26,7 @@ export async function signBundleBankInputs({
       phase_total: total,
       completed: overallCompleted,
       total: totalCount,
+      worker_count,
       phase_percent: total ? Math.round((completed / total) * 100) : 0,
       overall_percent: totalCount ? Math.round((overallCompleted / totalCount) * 100) : 0
     });
