@@ -1,13 +1,11 @@
 import { base64urlToBytes, utf8Decode } from "./core/crypto/bytes.js";
 
-export const POLLING_CAPABILITY_HORIZON_HOURS = 76;
-export const POLLING_CAPABILITY_SLOT_INTERVAL_MINUTES = 30;
-export const POLLING_CAPABILITY_SLOT_COUNT =
-  (POLLING_CAPABILITY_HORIZON_HOURS * 60) / POLLING_CAPABILITY_SLOT_INTERVAL_MINUTES;
+export const POLLING_CAPABILITY_HORIZON_HOURS = 72;
+export const POLLING_CAPABILITY_SLOT_INTERVAL_MINUTES = 60;
+export const POLLING_CAPABILITY_SLOT_OFFSET_MINUTES = 30;
+export const POLLING_CAPABILITY_SLOT_COUNT = POLLING_CAPABILITY_HORIZON_HOURS;
 export const POLLING_CAPABILITY_EXTERNAL_ID_CHUNK_SIZE = 20;
-export const DEFAULT_DETERMINISTIC_POLLING_PATHS = [
-  "/corporate/premium/v2/payments?page=1&size=20"
-];
+export const DEFAULT_DETERMINISTIC_POLLING_PATHS = [];
 
 function originatingHeadersFromBundle(bundle) {
   const headers = bundle?.payment_inputs?.[0]?.signed_headers ?? [];
@@ -40,7 +38,9 @@ function chunks(values, size) {
 }
 
 function slotDate(startMs, slotIndex) {
-  return new Date(startMs + slotIndex * POLLING_CAPABILITY_SLOT_INTERVAL_MINUTES * 60_000).toUTCString();
+  const offsetMs = POLLING_CAPABILITY_SLOT_OFFSET_MINUTES * 60_000;
+  const intervalMs = POLLING_CAPABILITY_SLOT_INTERVAL_MINUTES * 60_000;
+  return new Date(startMs + offsetMs + slotIndex * intervalMs).toUTCString();
 }
 
 function signedHeaders(originatingHeaders, originatingDate) {
@@ -64,10 +64,31 @@ function requestId(bundleId, scope, slotIndex, index) {
   return `${prefix}:${scope}:${slotIndex}:${index}`;
 }
 
+function defaultSlots(startMs) {
+  return Array.from({ length: POLLING_CAPABILITY_SLOT_COUNT }, (_, slotIndex) => ({
+    slot_index: slotIndex,
+    originating_date: slotDate(startMs, slotIndex)
+  }));
+}
+
+function requirementRequests(requirements) {
+  if (!requirements || !Array.isArray(requirements.requests)) {
+    return null;
+  }
+  return requirements.requests.map((request) => ({
+    scope: request.scope,
+    slot_index: request.slot_index,
+    deterministic_index: request.deterministic_index,
+    chunk_index: request.chunk_index,
+    originating_date: request.originating_date
+  }));
+}
+
 export function buildPollingCapabilityInputsV1({
   bundle,
   createdAt = new Date(),
-  deterministicPaths = DEFAULT_DETERMINISTIC_POLLING_PATHS
+  deterministicPaths = DEFAULT_DETERMINISTIC_POLLING_PATHS,
+  requirements = bundle?.polling_capability_requirements
 }) {
   const createdAtDate = createdAt instanceof Date ? createdAt : new Date(createdAt);
   if (Number.isNaN(createdAtDate.getTime())) {
@@ -78,45 +99,77 @@ export function buildPollingCapabilityInputsV1({
   const externalIds = bundle.payment_inputs.map(externalIdFromPaymentInput);
   const externalIdChunks = chunks(externalIds, POLLING_CAPABILITY_EXTERNAL_ID_CHUNK_SIZE);
   const inputs = [];
+  const requiredRequests = requirementRequests(requirements);
 
-  for (let slotIndex = 0; slotIndex < POLLING_CAPABILITY_SLOT_COUNT; slotIndex += 1) {
-    const originatingDate = slotDate(startMs, slotIndex);
-    for (let index = 0; index < deterministicPaths.length; index += 1) {
-      const path = deterministicPaths[index];
+  if (requiredRequests) {
+    for (const required of requiredRequests) {
+      if (required.scope !== "bundle_payment_status") {
+        continue;
+      }
+      const chunk = externalIdChunks[required.chunk_index];
+      if (!chunk) {
+        throw new Error("polling capability requirement chunk_index is invalid");
+      }
       inputs.push({
         version: "bank_read_signing_input_v1",
-        request_id: requestId(bundle.bundle_id, "det", slotIndex, index),
-        scope: "deterministic",
-        slot_index: slotIndex,
-        deterministic_index: index,
-        method: "GET",
-        path,
-        signed_headers: signedHeaders(originatingHeaders, originatingDate)
-      });
-    }
-    for (let chunkIndex = 0; chunkIndex < externalIdChunks.length; chunkIndex += 1) {
-      const chunk = externalIdChunks[chunkIndex];
-      inputs.push({
-        version: "bank_read_signing_input_v1",
-        request_id: requestId(bundle.bundle_id, "pay", slotIndex, chunkIndex),
+        request_id: requestId(bundle.bundle_id, "pay", required.slot_index, required.chunk_index),
         scope: "bundle_payment_status",
-        slot_index: slotIndex,
-        chunk_index: chunkIndex,
+        slot_index: required.slot_index,
+        chunk_index: required.chunk_index,
         external_ids: chunk,
         method: "GET",
         path: paymentStatusPath(chunk),
-        signed_headers: signedHeaders(originatingHeaders, originatingDate)
+        signed_headers: signedHeaders(originatingHeaders, required.originating_date)
       });
+    }
+  } else {
+    for (const slot of defaultSlots(startMs)) {
+      const originatingDate = slot.originating_date;
+      const slotIndex = slot.slot_index;
+      for (let chunkIndex = 0; chunkIndex < externalIdChunks.length; chunkIndex += 1) {
+        const chunk = externalIdChunks[chunkIndex];
+        inputs.push({
+          version: "bank_read_signing_input_v1",
+          request_id: requestId(bundle.bundle_id, "pay", slotIndex, chunkIndex),
+          scope: "bundle_payment_status",
+          slot_index: slotIndex,
+          chunk_index: chunkIndex,
+          external_ids: chunk,
+          method: "GET",
+          path: paymentStatusPath(chunk),
+          signed_headers: signedHeaders(originatingHeaders, originatingDate)
+        });
+      }
+    }
+  }
+
+  if (!requiredRequests) {
+    for (const slot of defaultSlots(startMs)) {
+      const originatingDate = slot.originating_date;
+      const slotIndex = slot.slot_index;
+      for (let index = 0; index < deterministicPaths.length; index += 1) {
+        const path = deterministicPaths[index];
+        inputs.push({
+          version: "bank_read_signing_input_v1",
+          request_id: requestId(bundle.bundle_id, "det", slotIndex, index),
+          scope: "deterministic",
+          slot_index: slotIndex,
+          deterministic_index: index,
+          method: "GET",
+          path,
+          signed_headers: signedHeaders(originatingHeaders, originatingDate)
+        });
+      }
     }
   }
 
   return {
     version: "polling_capability_package_v1",
     bundle_id: bundle.bundle_id,
-    created_at: createdAtDate.toISOString(),
-    valid_until: new Date(startMs + POLLING_CAPABILITY_HORIZON_HOURS * 60 * 60_000).toISOString(),
-    horizon_hours: POLLING_CAPABILITY_HORIZON_HOURS,
-    slot_interval_minutes: POLLING_CAPABILITY_SLOT_INTERVAL_MINUTES,
+    created_at: requirements?.created_at ?? createdAtDate.toISOString(),
+    valid_until: requirements?.valid_until ?? new Date(startMs + POLLING_CAPABILITY_HORIZON_HOURS * 60 * 60_000).toISOString(),
+    horizon_hours: requirements?.horizon_hours ?? POLLING_CAPABILITY_HORIZON_HOURS,
+    slot_interval_minutes: requirements?.slot_interval_minutes ?? POLLING_CAPABILITY_SLOT_INTERVAL_MINUTES,
     requests: inputs
   };
 }

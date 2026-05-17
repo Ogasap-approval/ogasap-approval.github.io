@@ -865,7 +865,7 @@ async function init() {
   });
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./service-worker.js?v=parallel-signing-v36").catch(() => {});
+    navigator.serviceWorker.register("./service-worker.js?v=hourly-polling-v37").catch(() => {});
   }
 
   let persistent = await isStoragePersisted().catch(() => false);

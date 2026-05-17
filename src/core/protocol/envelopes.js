@@ -659,11 +659,11 @@ export function validatePollingCapabilityPackageV1(pkg) {
   assertPattern("polling bundle_id", pkg.bundle_id, ID_8_128);
   assertDateTime("polling created_at", pkg.created_at);
   assertDateTime("polling valid_until", pkg.valid_until);
-  if (pkg.slot_interval_minutes !== 30) {
-    throw new RangeError("polling slot_interval_minutes must be 30");
+  if (pkg.slot_interval_minutes !== 60) {
+    throw new RangeError("polling slot_interval_minutes must be 60");
   }
-  if (pkg.horizon_hours !== 76) {
-    throw new RangeError("polling horizon_hours must be 76");
+  if (pkg.horizon_hours !== 72) {
+    throw new RangeError("polling horizon_hours must be 72");
   }
   if (!Array.isArray(pkg.requests) || pkg.requests.length > MAX_POLLING_CAPABILITY_REQUESTS) {
     throw new RangeError(`polling requests must contain at most ${MAX_POLLING_CAPABILITY_REQUESTS} entries`);
@@ -673,7 +673,7 @@ export function validatePollingCapabilityPackageV1(pkg) {
     if (!["deterministic", "bundle_payment_status"].includes(request.scope)) {
       throw new RangeError("polling request scope is invalid");
     }
-    if (!Number.isInteger(request.slot_index) || request.slot_index < 0 || request.slot_index >= 152) {
+    if (!Number.isInteger(request.slot_index) || request.slot_index < 0 || request.slot_index > 96) {
       throw new RangeError("polling request slot_index is invalid");
     }
     if (typeof request.phone_sign_share_base64url !== "string" || !BASE64URL.test(request.phone_sign_share_base64url)) {
