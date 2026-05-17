@@ -1,5 +1,5 @@
 import { signBundleBankInputs } from "./bank-signing-batch.js";
-import { signPaymentInputsForBundle } from "./signing-session.js";
+import { signPaymentInputsForBundleParallel } from "./signing-worker-pool.js";
 
 self.addEventListener("message", async (event) => {
   const { phoneSharePackage, bundle, approvedAt, paymentInputs } = event.data;
@@ -19,7 +19,7 @@ self.addEventListener("message", async (event) => {
       return;
     }
 
-    const signatures = await signPaymentInputsForBundle({
+    const signatures = await signPaymentInputsForBundleParallel({
       phoneSharePackage,
       paymentInputs,
       onProgress

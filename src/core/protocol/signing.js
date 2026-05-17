@@ -170,15 +170,11 @@ export async function signBundleApprovalV1(approvalInput, phoneSharePackage, opt
   };
 }
 
-export async function signBankPaymentInputV1(bankInput, phoneSharePackage, options = {}) {
+export function createBankInputSignerV1(phoneSharePackage, options = {}) {
   assertNoProductionBlindingOverride(options);
   const share = decodePhoneSharePackageV1(phoneSharePackage);
-  const paddedDigest = await paddedBankSigningDigestV1(
-    bankInput,
-    modulusByteLength(share.modulus),
-    options.cryptoProvider
-  );
-  const signShare = signShareForPaddedDigest({
+  const modulusBytes = modulusByteLength(share.modulus);
+  const signPaddedDigest = (paddedDigest) => signShareForPaddedDigest({
     paddedDigest,
     modulus: share.modulus,
     shareSi: share.shareSi,
@@ -190,34 +186,40 @@ export async function signBankPaymentInputV1(bankInput, phoneSharePackage, optio
   });
 
   return {
-    padded_digest: paddedDigest,
-    sign_share: signShare,
-    sign_share_base64url: bytesToBase64url(signShare)
+    async signPaymentInput(bankInput) {
+      const paddedDigest = await paddedBankSigningDigestV1(
+        bankInput,
+        modulusBytes,
+        options.cryptoProvider
+      );
+      const signShare = signPaddedDigest(paddedDigest);
+      return {
+        padded_digest: paddedDigest,
+        sign_share: signShare,
+        sign_share_base64url: bytesToBase64url(signShare)
+      };
+    },
+
+    async signReadInput(bankInput) {
+      const paddedDigest = await paddedBankReadSigningDigestV1(
+        bankInput,
+        modulusBytes,
+        options.cryptoProvider
+      );
+      const signShare = signPaddedDigest(paddedDigest);
+      return {
+        padded_digest: paddedDigest,
+        sign_share: signShare,
+        sign_share_base64url: bytesToBase64url(signShare)
+      };
+    }
   };
 }
 
-export async function signBankReadInputV1(bankInput, phoneSharePackage, options = {}) {
-  assertNoProductionBlindingOverride(options);
-  const share = decodePhoneSharePackageV1(phoneSharePackage);
-  const paddedDigest = await paddedBankReadSigningDigestV1(
-    bankInput,
-    modulusByteLength(share.modulus),
-    options.cryptoProvider
-  );
-  const signShare = signShareForPaddedDigest({
-    paddedDigest,
-    modulus: share.modulus,
-    shareSi: share.shareSi,
-    shareIndex: share.shareIndex,
-    players: share.players,
-    threshold: share.threshold,
-    blinded: true,
-    cryptoProvider: options.cryptoProvider
-  });
+export async function signBankPaymentInputV1(bankInput, phoneSharePackage, options = {}) {
+  return createBankInputSignerV1(phoneSharePackage, options).signPaymentInput(bankInput);
+}
 
-  return {
-    padded_digest: paddedDigest,
-    sign_share: signShare,
-    sign_share_base64url: bytesToBase64url(signShare)
-  };
+export async function signBankReadInputV1(bankInput, phoneSharePackage, options = {}) {
+  return createBankInputSignerV1(phoneSharePackage, options).signReadInput(bankInput);
 }

@@ -9,7 +9,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "9430d6bf3d0a105a351785bef61177605b614e28a1ec4c5e6523c8b6fd669771"
+      "sha256": "a35fcd528ca9d520f1c75d29d526b9d85759f56c5dc7267bcae95320df434c8b"
     },
     {
       "path": "kernel.html",
@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "32fee9eb135ab242977a3e3ccddbdbc9e3217e9991baae88badaa52703815947"
+      "sha256": "355970e0c49dae7d5eca01b787add080ee5dddcee5c6cd7cb725b735d045a3a6"
     },
     {
       "path": "src/api-client.js",
@@ -29,11 +29,11 @@
     },
     {
       "path": "src/app.js",
-      "sha256": "f21dbe810258d2350e61f04b602562e33e4aa2c18be4984bfaa96b1f493292c3"
+      "sha256": "8529b70b441dd0cd71ebed296bbe625931d9b874374ce60ca05b4cbe89f650a1"
     },
     {
       "path": "src/approval-kernel.js",
-      "sha256": "d402293e44b67a1582d137e37f454e533fd46d749f1fc39a55beaf60f94bfa15"
+      "sha256": "3811b15ec3ee0abc247fa47b8063703ecd96b8f9954c96a9666584ffcef8cda5"
     },
     {
       "path": "src/assets/icon.svg",
@@ -41,7 +41,7 @@
     },
     {
       "path": "src/bank-signing-batch.js",
-      "sha256": "90677b10e7cec631f76bf34d4aa02808570b861f5f209fd0ccee739d23a731ab"
+      "sha256": "bf78fcf2e70adec32d514357f2bdd85373dbf203d2b296faf19435d41726258e"
     },
     {
       "path": "src/core/crypto/bigint.js",
@@ -65,7 +65,7 @@
     },
     {
       "path": "src/core/crypto/threshold-rsa.js",
-      "sha256": "2fc9c0b0039b301904b0f9ecfdfbb63a5e4a80725279b00ac1fa6b51ccce8bad"
+      "sha256": "af38f2f7a0be976301a4629f3f8da013ae951dfb46aaaa32b679073b15628331"
     },
     {
       "path": "src/core/protocol/canonical.js",
@@ -77,7 +77,7 @@
     },
     {
       "path": "src/core/protocol/signing.js",
-      "sha256": "aa6a5984c8c2f97d98a507326ccebe72113ddf6b1be869fa6afa852a4867f7b3"
+      "sha256": "70b85f52ca236ab0e6ca7e8ed48711fe6d239e31574264c071a07534c1ea834f"
     },
     {
       "path": "src/force-update.js",
@@ -100,12 +100,20 @@
       "sha256": "8395c0f5b95cc54bcfeb1420a157c56f2a1a0fd1b16e69f9d83d9db64118ae4f"
     },
     {
+      "path": "src/sign-task-worker.js",
+      "sha256": "5a5ce33851f94fc6e576f6183938390707372aa2dd89b31b3de47e4b449402fc"
+    },
+    {
       "path": "src/sign-worker.js",
-      "sha256": "89cdd86180897337f20b37cb3ab33b6bf282f30dc1bddafc6d66f82b92ec6915"
+      "sha256": "ac9b1cfd17926898133cd202ea21e184f1fc689ff8b53845e3bfcee0c5f87253"
     },
     {
       "path": "src/signing-session.js",
       "sha256": "8b926b70500cc0314ce0011773aa941a54a20c0c353c75b609cc7318645b11a4"
+    },
+    {
+      "path": "src/signing-worker-pool.js",
+      "sha256": "00c2a87c4d4701468f885b53006a321a7fe42a2f12b9c94944b11862b127a84e"
     },
     {
       "path": "src/storage.js",

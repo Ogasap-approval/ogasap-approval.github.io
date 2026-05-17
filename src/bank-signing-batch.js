@@ -1,9 +1,11 @@
-import { signBankReadInputV1 } from "./core/protocol/signing.js";
-import { signPaymentInputsForBundle } from "./signing-session.js";
 import {
   attachPollingCapabilitySignatures,
   buildPollingCapabilityInputsV1
 } from "./polling-capabilities.js";
+import {
+  signBankReadInputsParallel,
+  signPaymentInputsForBundleParallel
+} from "./signing-worker-pool.js";
 
 const POLLING_PROGRESS_STEP = 10;
 
@@ -11,7 +13,6 @@ export async function signBundleBankInputs({
   phoneSharePackage,
   bundle,
   approvedAt = new Date(),
-  cryptoProvider = globalThis.crypto,
   onProgress = () => {}
 }) {
   const paymentCount = bundle.payment_inputs.length;
@@ -30,10 +31,9 @@ export async function signBundleBankInputs({
     });
   };
 
-  const paymentSignatures = await signPaymentInputsForBundle({
+  const paymentSignatures = await signPaymentInputsForBundleParallel({
     phoneSharePackage,
     paymentInputs: bundle.payment_inputs,
-    cryptoProvider,
     onProgress: emitProgress
   });
   const pollingPackageInput = buildPollingCapabilityInputsV1({
@@ -42,33 +42,12 @@ export async function signBundleBankInputs({
   });
   const pollingCount = pollingPackageInput.requests.length;
   totalCount = paymentCount + pollingCount;
-  const pollingSignatures = [];
-  for (const input of pollingPackageInput.requests) {
-    const index = pollingSignatures.length;
-    if (index === 0 || index % POLLING_PROGRESS_STEP === 0) {
-      emitProgress({
-        stage: "polling",
-        current: index + 1,
-        completed: index,
-        total: pollingCount
-      });
-    }
-    const signed = await signBankReadInputV1(input, phoneSharePackage, {
-      cryptoProvider
-    });
-    pollingSignatures.push({
-      request_id: input.request_id,
-      sign_share_base64url: signed.sign_share_base64url
-    });
-    if (index + 1 === pollingCount || (index + 1) % POLLING_PROGRESS_STEP === 0) {
-      emitProgress({
-        stage: "polling",
-        current: index + 1,
-        completed: index + 1,
-        total: pollingCount
-      });
-    }
-  }
+  const pollingSignatures = await signBankReadInputsParallel({
+    phoneSharePackage,
+    inputs: pollingPackageInput.requests,
+    progressStep: POLLING_PROGRESS_STEP,
+    onProgress: emitProgress
+  });
   onProgress({
     stage: "submitting",
     current: totalCount,

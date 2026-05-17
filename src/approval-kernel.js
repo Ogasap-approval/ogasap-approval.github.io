@@ -5,7 +5,9 @@ import { requestApprovalAssertion } from "./webauthn.js";
 
 const SIGN_WORKER_GRAPH = [
   "src/sign-worker.js",
+  "src/sign-task-worker.js",
   "src/bank-signing-batch.js",
+  "src/signing-worker-pool.js",
   "src/signing-session.js",
   "src/polling-capabilities.js",
   "src/core/crypto/bigint.js",

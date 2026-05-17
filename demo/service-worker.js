@@ -2,7 +2,7 @@
 // changes. The fetch handler is strict cache-first, so without a fresh CACHE_NAME
 // installed clients keep serving the previously cached copy indefinitely.
 // Enforced by tools/check-service-worker-cache.mjs in CI.
-const CACHE_NAME = "approval-approve-demo-pwa-v35";
+const CACHE_NAME = "approval-approve-demo-pwa-v36";
 const PRECACHE_URLS = [
   "./",
   "./index.html",
@@ -16,8 +16,10 @@ const PRECACHE_URLS = [
   "../prod/src/payment-view.js",
   "../prod/src/bank-signing-batch.js",
   "../prod/src/polling-capabilities.js",
+  "../prod/src/sign-task-worker.js",
   "../prod/src/sign-worker.js",
   "../prod/src/signing-session.js",
+  "../prod/src/signing-worker-pool.js",
   "../prod/src/storage.js",
   "../prod/src/webauthn.js",
   "../prod/src/core/crypto/bigint.js",

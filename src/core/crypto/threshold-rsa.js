@@ -58,6 +58,26 @@ function signedModPow(base, exponent, modulus) {
   return modInverse(modPow(base, -exponent, modulus), modulus);
 }
 
+function modPowPairSameBase(base, leftExponent, rightExponent, modulus) {
+  let left = 1n;
+  let right = 1n;
+  let b = mod(base, modulus);
+  let l = leftExponent;
+  let r = rightExponent;
+  while (l > 0n || r > 0n) {
+    if ((l & 1n) === 1n) {
+      left = mod(left * b, modulus);
+    }
+    if ((r & 1n) === 1n) {
+      right = mod(right * b, modulus);
+    }
+    l >>= 1n;
+    r >>= 1n;
+    b = mod(b * b, modulus);
+  }
+  return [left, right];
+}
+
 function computeLambda(delta, shares, i, j) {
   if (i === j) {
     throw new Error("lambda interpolation points must differ");
@@ -170,8 +190,7 @@ export function partialSignatureXi({
 
   const randomBits = Math.max(bitLength(exponent), bitLength(modulus));
   const r = randomBigIntWithBitLength(randomBits, cryptoProvider);
-  const blindedPower = modPow(x, exponent + r, modulus);
-  const unblindPower = modPow(x, r, modulus);
+  const [blindedPower, unblindPower] = modPowPairSameBase(x, exponent + r, r, modulus);
   return mod(blindedPower * modInverse(unblindPower, modulus), modulus);
 }
 
