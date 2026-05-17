@@ -865,7 +865,7 @@ async function init() {
   });
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+    navigator.serviceWorker.register("./service-worker.js?v=signing-progress-v33").catch(() => {});
   }
 
   let persistent = await isStoragePersisted().catch(() => false);
