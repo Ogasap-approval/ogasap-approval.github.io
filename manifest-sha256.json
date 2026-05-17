@@ -9,7 +9,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "eedce724bfd3d23418bf1bca9c31e194f55a3e1d538da6313c75d6a51194b8f3"
+      "sha256": "5492f2907f9fe1d7007587cbf12b1663b71e83a80b30d51c177f38858317f5e0"
     },
     {
       "path": "kernel.html",
@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "e1355f83f9b9948a63867bde797f2ee971c822264887bd808259e03545e326c6"
+      "sha256": "86ac706ea91681789b4dd4a951916cd4da91c0dfe29a39fe2bb8f281e05af138"
     },
     {
       "path": "src/api-client.js",
@@ -29,7 +29,7 @@
     },
     {
       "path": "src/app.js",
-      "sha256": "7b28efd358da7f288af48f1ff0cd2e5076eca3a4aab381e13c504b3aa5abd780"
+      "sha256": "04f86335825aab20a0f75aa593d32803d653b7109d4957097cb81e5c8b33a762"
     },
     {
       "path": "src/approval-kernel.js",
@@ -89,7 +89,7 @@
     },
     {
       "path": "src/kernel-frame.js",
-      "sha256": "c6f29837c807e56d305dee79e0df376f4afc8c22b7bccb878c26a32e701eeca5"
+      "sha256": "a7e81c599c506b247a33b3dfd207ec10d58af2ae381c50c8c71de08b7574db8e"
     },
     {
       "path": "src/payment-view.js",
@@ -117,7 +117,7 @@
     },
     {
       "path": "src/styles.css",
-      "sha256": "0458e168a2412e74da4ee7c7ce87b302a072b1ef2c42e4be6d80b5a798a313f1"
+      "sha256": "3df9d7b2cd6d1b0489bb1127d20ec504e590d7fc902906e70c1f1369e4103142"
     },
     {
       "path": "src/webauthn.js",

@@ -53,11 +53,16 @@ button:disabled {
 
 button.approve-button-progress,
 button.approve-button-progress:disabled {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   opacity: 1;
   color: #fff;
-  font-size: 12px;
-  line-height: 1.15;
+  min-height: 46px;
+  font-size: 10px;
+  line-height: 1.05;
   padding-inline: 8px;
+  text-align: center;
   background:
     linear-gradient(
       90deg,
@@ -65,14 +70,15 @@ button.approve-button-progress:disabled {
       var(--accent) var(--approval-progress, 0%) 100%
     );
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-overflow: clip;
+  white-space: pre-line;
 }
 
 @media (max-width: 420px) {
   button.approve-button-progress,
   button.approve-button-progress:disabled {
-    font-size: 11px;
+    font-size: 9.5px;
+    padding-inline: 5px;
   }
 }
 

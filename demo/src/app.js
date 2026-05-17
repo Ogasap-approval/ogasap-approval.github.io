@@ -453,7 +453,7 @@ function renderApprovalState() {
     els.approveButton.title = "";
   }
   els.approveButton.disabled = state.approvalBusy || approved || !canApprove;
-  els.approveButton.textContent = approved ? "Approved" : showProgress ? approvalProgressText(state.approvalProgress) : "Approve";
+  els.approveButton.textContent = approved ? "Approved" : showProgress ? approvalProgressText(state.approvalProgress, { multiline: true }) : "Approve";
 }
 
 function currentBundleApproved() {
@@ -486,33 +486,41 @@ function formatEta(seconds) {
   return minutes ? `${hours}h ${minutes}m` : `${hours}h`;
 }
 
-function etaText(progress) {
+function etaValue(progress) {
   return Number.isFinite(Number(progress?.eta_seconds))
-    ? ` · ETA ${formatEta(progress.eta_seconds)}`
+    ? formatEta(progress.eta_seconds)
     : "";
 }
 
-function approvalProgressText(progress) {
+function signingProgressParts(progress) {
+  const percent = boundedPercent(progress);
+  const total = progress.phase_total ?? progress.total ?? 1;
+  const done = Math.max(0, Math.min(total, progress.phase_completed ?? progress.completed ?? 0));
+  const workers = Number(progress.worker_count ?? 1);
+  const workerCount = Number.isFinite(workers) && workers > 0 ? workers : 1;
+  const label = progress.stage === "polling" ? "Status" : "Pay";
+  const eta = etaValue(progress);
+  return {
+    top: `${label} ${done}/${total}`,
+    bottom: `${workerCount}w · ${percent}%${eta ? ` · ETA ${eta}` : ""}`
+  };
+}
+
+function approvalProgressText(progress, { multiline = false } = {}) {
   if (!progress) {
     return "Approve";
   }
   if (progress.message) {
     return progress.message;
   }
-  const percent = boundedPercent(progress);
-  const total = progress.phase_total ?? progress.total ?? 1;
-  const done = Math.max(0, Math.min(total, progress.phase_completed ?? progress.completed ?? 0));
-  const workers = Number(progress.worker_count ?? 1);
-  const workerCount = Number.isFinite(workers) && workers > 0 ? workers : 1;
-  if (progress.stage === "payments") {
-    return `Pay req. ${done}/${total} · ${workerCount}w · ${percent}%${etaText(progress)}`;
-  }
-  if (progress.stage === "polling") {
-    return `Status req. ${done}/${total} · ${workerCount}w · ${percent}%${etaText(progress)}`;
+  if (progress.stage === "payments" || progress.stage === "polling") {
+    const parts = signingProgressParts(progress);
+    return multiline ? `${parts.top}\n${parts.bottom}` : `${parts.top} · ${parts.bottom}`;
   }
   if (progress.stage === "submitting") {
     return "Submitting approval · 100%";
   }
+  const percent = boundedPercent(progress);
   return `Signing · ${percent}%`;
 }
 
@@ -879,7 +887,7 @@ async function init() {
   });
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./service-worker.js?v=eta-workers-v40").catch(() => {});
+    navigator.serviceWorker.register("./service-worker.js?v=two-line-eta-v41").catch(() => {});
   }
 
   let persistent = await isStoragePersisted().catch(() => false);
