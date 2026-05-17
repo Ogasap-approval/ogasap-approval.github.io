@@ -23,7 +23,7 @@ import {
   randomPrfSaltBase64url,
   requestApprovalAssertion,
   requestPrfWrapKey
-} from "./webauthn.js?v=key-inactive-v65";
+} from "./webauthn.js?v=mixed-bank-v66";
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
@@ -409,7 +409,54 @@ function totalText(totals = []) {
   return totals.map((total) => amountMinorToDecimal(total.amount_minor, total.currency)).join(", ");
 }
 
-function bankSubmissionText(submission) {
+function bankPaymentSummaryText(payments = []) {
+  const counts = {
+    executed: 0,
+    pending: 0,
+    failed: 0
+  };
+  for (const payment of payments) {
+    const bankStatus = String(payment.bank_status ?? "").toLowerCase();
+    const paymentStatus = String(payment.bank_payment_status ?? "").toUpperCase();
+    if (paymentStatus === "PAYMENT_EXECUTED" || bankStatus === "executed") {
+      counts.executed += 1;
+    } else if (
+      ["PAYMENT_REJECTED", "PAYMENT_CANCELLED", "AUTHORIZATION_FAILED"].includes(paymentStatus) ||
+      ["failed", "auth_expired", "key_inactive"].includes(bankStatus) ||
+      payment.bank_error
+    ) {
+      counts.failed += 1;
+    } else if (paymentStatus || bankStatus) {
+      counts.pending += 1;
+    }
+  }
+
+  const total = counts.executed + counts.pending + counts.failed;
+  if (total === 0) {
+    return "";
+  }
+  if (counts.executed === total) {
+    return "Bank executed";
+  }
+  if (counts.failed === total) {
+    return "Bank failed";
+  }
+  if (counts.pending === total) {
+    return "";
+  }
+  const parts = [
+    counts.executed ? `${counts.executed} executed` : "",
+    counts.pending ? `${counts.pending} pending` : "",
+    counts.failed ? `${counts.failed} failed` : ""
+  ].filter(Boolean);
+  return `Bank mixed: ${parts.join(", ")}`;
+}
+
+function bankSubmissionText(submission, payments = []) {
+  const paymentSummary = bankPaymentSummaryText(payments);
+  if (paymentSummary) {
+    return paymentSummary;
+  }
   if (!submission) {
     return "";
   }
@@ -663,7 +710,7 @@ function renderRecentApprovals() {
 
     const meta = document.createElement("div");
     meta.className = "activity-meta";
-    const bankStatus = bankSubmissionText(approval.bank_submission);
+    const bankStatus = bankSubmissionText(approval.bank_submission, visiblePaymentsFromApproval(approval));
     meta.append(
       span(approvalApproverText(approval), "activity-approver"),
       ...(bankStatus ? [span(bankStatus, "activity-status")] : []),
@@ -696,7 +743,7 @@ function renderActivityDetail() {
   els.activityDetailSummary.textContent = [
     totalText(approval.totals) || "-",
     `Approved ${approvalTimeText(approval)}`,
-    bankSubmissionText(approval.bank_submission),
+    bankSubmissionText(approval.bank_submission, visiblePaymentsFromApproval(approval)),
     shortBundleId(approval.bundle_id)
   ].filter(Boolean).join(" · ");
   els.activityDetailTableWrap.classList.remove("hidden");
@@ -1364,7 +1411,7 @@ async function init() {
   });
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./service-worker.js?v=key-inactive-v65").catch(() => {});
+    navigator.serviceWorker.register("./service-worker.js?v=mixed-bank-v66").catch(() => {});
   }
 
   let persistent = await isStoragePersisted().catch(() => false);
