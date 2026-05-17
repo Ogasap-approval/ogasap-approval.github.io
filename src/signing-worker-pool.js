@@ -20,34 +20,46 @@ function shouldReport(completed, total, step) {
   return completed === 0 || completed === total || completed % step === 0;
 }
 
-function progressPayload(stage, completed, total, workerCount) {
+function nowMs() {
+  return globalThis.performance?.now?.() ?? Date.now();
+}
+
+function progressPayload(stage, completed, total, workerCount, startedAt) {
+  const elapsedMs = Math.max(0, Math.round(nowMs() - startedAt));
+  const remaining = Math.max(0, total - completed);
+  const etaSeconds = completed > 0
+    ? Math.ceil((elapsedMs / completed) * remaining / 1000)
+    : undefined;
   return {
     stage,
     current: Math.min(completed + 1, total),
     completed,
     total,
-    worker_count: workerCount
+    worker_count: workerCount,
+    elapsed_ms: elapsedMs,
+    eta_seconds: etaSeconds
   };
 }
 
 async function signSequential({ kind, phoneSharePackage, inputs, stage, progressStep, onProgress }) {
   const signer = createBankInputSignerV1(phoneSharePackage);
   const signatures = [];
-  onProgress(progressPayload(stage, 0, inputs.length, 1));
+  const batchStartedAt = nowMs();
+  onProgress(progressPayload(stage, 0, inputs.length, 1, batchStartedAt));
   for (let index = 0; index < inputs.length; index += 1) {
     const input = inputs[index];
-    const startedAt = globalThis.performance?.now?.() ?? Date.now();
+    const startedAt = nowMs();
     const signed = kind === "payment"
       ? await signer.signPaymentInput(input)
       : await signer.signReadInput(input);
-    const finishedAt = globalThis.performance?.now?.() ?? Date.now();
+    const finishedAt = nowMs();
     signatures.push({
       request_id: input.request_id,
       sign_share_base64url: signed.sign_share_base64url,
       duration_ms: Math.round(finishedAt - startedAt)
     });
     if (shouldReport(index + 1, inputs.length, progressStep)) {
-      onProgress(progressPayload(stage, index + 1, inputs.length, 1));
+      onProgress(progressPayload(stage, index + 1, inputs.length, 1, batchStartedAt));
     }
   }
   return signatures;
@@ -88,17 +100,18 @@ async function signWithPool({ kind, phoneSharePackage, inputs, stage, progressSt
   const workerCount = workerCountFor(inputs.length);
   const results = new Array(inputs.length);
   const workers = [];
+  const batchStartedAt = nowMs();
   let completed = 0;
   const onResult = (index, signature) => {
     results[index] = signature;
     completed += 1;
     if (shouldReport(completed, inputs.length, progressStep)) {
-      onProgress(progressPayload(stage, completed, inputs.length, workerCount));
+      onProgress(progressPayload(stage, completed, inputs.length, workerCount, batchStartedAt));
     }
   };
 
   try {
-    onProgress(progressPayload(stage, 0, inputs.length, workerCount));
+    onProgress(progressPayload(stage, 0, inputs.length, workerCount, batchStartedAt));
     for (const [index, items] of partition(inputs, workerCount).entries()) {
       try {
         workers.push(startWorker({

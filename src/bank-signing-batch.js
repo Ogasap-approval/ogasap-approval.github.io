@@ -9,6 +9,10 @@ import {
 
 const POLLING_PROGRESS_STEP = 10;
 
+function nowMs() {
+  return globalThis.performance?.now?.() ?? Date.now();
+}
+
 export async function signBundleBankInputs({
   phoneSharePackage,
   bundle,
@@ -16,9 +20,20 @@ export async function signBundleBankInputs({
   onProgress = () => {}
 }) {
   const paymentCount = bundle.payment_inputs.length;
-  let totalCount = paymentCount;
+  const batchStartedAt = nowMs();
+  const pollingPackageInput = buildPollingCapabilityInputsV1({
+    bundle,
+    createdAt: approvedAt
+  });
+  const pollingCount = pollingPackageInput.requests.length;
+  const totalCount = paymentCount + pollingCount;
   const emitProgress = ({ stage, current, completed, total, worker_count }) => {
     const overallCompleted = stage === "polling" ? paymentCount + completed : completed;
+    const elapsedMs = Math.max(0, Math.round(nowMs() - batchStartedAt));
+    const remaining = Math.max(0, totalCount - overallCompleted);
+    const etaSeconds = overallCompleted > 0
+      ? Math.ceil((elapsedMs / overallCompleted) * remaining / 1000)
+      : undefined;
     onProgress({
       stage,
       current,
@@ -27,6 +42,8 @@ export async function signBundleBankInputs({
       completed: overallCompleted,
       total: totalCount,
       worker_count,
+      elapsed_ms: elapsedMs,
+      eta_seconds: etaSeconds,
       phase_percent: total ? Math.round((completed / total) * 100) : 0,
       overall_percent: totalCount ? Math.round((overallCompleted / totalCount) * 100) : 0
     });
@@ -37,12 +54,6 @@ export async function signBundleBankInputs({
     paymentInputs: bundle.payment_inputs,
     onProgress: emitProgress
   });
-  const pollingPackageInput = buildPollingCapabilityInputsV1({
-    bundle,
-    createdAt: approvedAt
-  });
-  const pollingCount = pollingPackageInput.requests.length;
-  totalCount = paymentCount + pollingCount;
   const pollingSignatures = await signBankReadInputsParallel({
     phoneSharePackage,
     inputs: pollingPackageInput.requests,
@@ -57,7 +68,9 @@ export async function signBundleBankInputs({
     completed: totalCount,
     total: totalCount,
     phase_percent: 100,
-    overall_percent: 100
+    overall_percent: 100,
+    elapsed_ms: Math.max(0, Math.round(nowMs() - batchStartedAt)),
+    eta_seconds: 0
   });
 
   return {

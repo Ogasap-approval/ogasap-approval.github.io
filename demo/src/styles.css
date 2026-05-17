@@ -348,6 +348,9 @@ button.approve-button-progress,
 button.approve-button-progress:disabled {
   opacity: 1;
   color: #fff;
+  font-size: 12px;
+  line-height: 1.15;
+  padding-inline: 8px;
   background:
     linear-gradient(
       90deg,
@@ -357,6 +360,13 @@ button.approve-button-progress:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+@media (max-width: 420px) {
+  button.approve-button-progress,
+  button.approve-button-progress:disabled {
+    font-size: 11px;
+  }
 }
 
 .count-control {

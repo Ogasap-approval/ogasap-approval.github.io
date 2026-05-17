@@ -114,6 +114,33 @@ function boundedPercent(progress) {
   return Math.max(0, Math.min(100, Number.isFinite(value) ? Math.round(value) : 0));
 }
 
+function formatEta(seconds) {
+  const value = Math.max(0, Math.ceil(Number(seconds)));
+  if (!Number.isFinite(value)) {
+    return "";
+  }
+  if (value < 1) {
+    return "<1s";
+  }
+  if (value < 60) {
+    return `${value}s`;
+  }
+  if (value < 3600) {
+    const minutes = Math.floor(value / 60);
+    const rest = value % 60;
+    return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
+  }
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  return minutes ? `${hours}h ${minutes}m` : `${hours}h`;
+}
+
+function etaText(progress) {
+  return Number.isFinite(Number(progress?.eta_seconds))
+    ? ` · ETA ${formatEta(progress.eta_seconds)}`
+    : "";
+}
+
 function approvalProgressText(progress) {
   if (!progress) {
     return "Approve";
@@ -122,15 +149,15 @@ function approvalProgressText(progress) {
     return progress.message;
   }
   const percent = boundedPercent(progress);
-  const current = Math.max(1, Math.min(progress.phase_total ?? progress.total ?? 1, progress.current ?? progress.phase_completed ?? 1));
   const total = progress.phase_total ?? progress.total ?? 1;
+  const done = Math.max(0, Math.min(total, progress.phase_completed ?? progress.completed ?? 0));
   const workers = Number(progress.worker_count ?? 1);
-  const workerText = `${Number.isFinite(workers) && workers > 0 ? workers : 1} worker${workers === 1 ? "" : "s"}`;
+  const workerCount = Number.isFinite(workers) && workers > 0 ? workers : 1;
   if (progress.stage === "payments") {
-    return `Signing payment req. ${current}/${total} · ${workerText} · ${percent}%`;
+    return `Pay req. ${done}/${total} · ${workerCount}w · ${percent}%${etaText(progress)}`;
   }
   if (progress.stage === "polling") {
-    return `Signing status req. ${current}/${total} · ${workerText} · ${percent}%`;
+    return `Status req. ${done}/${total} · ${workerCount}w · ${percent}%${etaText(progress)}`;
   }
   if (progress.stage === "submitting") {
     return "Submitting approval · 100%";
