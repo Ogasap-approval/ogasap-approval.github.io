@@ -46,6 +46,33 @@ function totalText(totals = []) {
   return totals.map((total) => amountMinorToDecimal(total.amount_minor, total.currency)).join(", ");
 }
 
+function bankSubmissionText(submission) {
+  if (!submission) {
+    return "";
+  }
+  if (!submission.enabled) {
+    return "Bank submission disabled";
+  }
+  const total = submission.total_payment_count ?? submission.payment_count ?? 0;
+  const done = submission.payment_count ?? 0;
+  if (submission.status === "queued") {
+    return "queued for bank submission by backend";
+  }
+  if (submission.status === "submitting") {
+    return `submitting to bank ${done}/${total}`;
+  }
+  if (submission.status === "executed") {
+    return "executed by bank";
+  }
+  if (submission.status === "submitted") {
+    return "submitted to bank";
+  }
+  if (submission.status === "failed") {
+    return `Bank submission failed${submission.error ? `: ${submission.error}` : ""}`;
+  }
+  return `Bank ${submission.status}`;
+}
+
 function setResult(result) {
   if (!result) {
     els.resultPanel.classList.add("hidden");
@@ -198,7 +225,9 @@ async function approveBundle() {
       isCancelled: () => lockEpoch !== state.lockEpoch || !state.phoneSharePackage,
       onStatus: setStatus
     });
-    const approvalDetail = totalText(state.bundle.totals) || result?.bundle_id || state.bundle.bundle_id;
+    const approvalDetail = [totalText(state.bundle.totals) || result?.bundle_id || state.bundle.bundle_id, bankSubmissionText(result?.bank_submission)]
+      .filter(Boolean)
+      .join(" · ");
     const approvalResult = {
       status: "approved",
       title: "Bundle approved successfully",
@@ -207,7 +236,7 @@ async function approveBundle() {
     state.approvedBundleIds.add(state.bundle.bundle_id);
     state.lastApprovalResult = approvalResult;
     setResult(approvalResult);
-    setStatus("Bundle approved");
+    setStatus(result?.bank_submission?.status === "queued" ? "Bundle approved; backend will submit to bank" : "Bundle approved");
     post("approved", {
       bundle_id: state.bundle.bundle_id,
       result: approvalResult

@@ -126,6 +126,45 @@ function totalText(totals = []) {
   return totals.map((total) => amountMinorToDecimal(total.amount_minor, total.currency)).join(", ");
 }
 
+function bankSubmissionText(submission) {
+  if (!submission) {
+    return "";
+  }
+  if (!submission.enabled) {
+    return "Bank disabled";
+  }
+  const total = submission.total_payment_count ?? submission.payment_count ?? 0;
+  const done = submission.payment_count ?? 0;
+  if (submission.status === "queued") {
+    return "Bank queued";
+  }
+  if (submission.status === "submitting") {
+    return `Bank ${done}/${total}`;
+  }
+  if (submission.status === "executed") {
+    return "Bank executed";
+  }
+  if (submission.status === "submitted") {
+    return "Bank submitted";
+  }
+  if (submission.status === "failed") {
+    return "Bank failed";
+  }
+  return `Bank ${submission.status}`;
+}
+
+function bankPaymentStatusText(payment) {
+  if (payment.bank_error) {
+    return `Bank failed: ${payment.bank_error}`;
+  }
+  const status = payment.bank_payment_status ?? payment.bank_status;
+  if (!status) {
+    return "";
+  }
+  const reason = payment.bank_payment_status_reason ? ` · ${payment.bank_payment_status_reason}` : "";
+  return `Bank ${status}${reason}`;
+}
+
 function shortBundleId(bundleId = "") {
   return bundleId.length > 18 ? `${bundleId.slice(0, 10)}...${bundleId.slice(-6)}` : bundleId;
 }
@@ -356,8 +395,10 @@ function renderRecentApprovals() {
 
     const meta = document.createElement("div");
     meta.className = "activity-meta";
+    const bankStatus = bankSubmissionText(approval.bank_submission);
     meta.append(
       cellSpan(approvalApproverText(approval), "activity-approver"),
+      ...(bankStatus ? [cellSpan(bankStatus, "activity-status")] : []),
       cellSpan(totalText(approval.totals) || "-", "activity-total")
     );
 
@@ -385,7 +426,12 @@ function renderActivityDetail() {
   els.activityDetailTitle.textContent = `${approval.payment_count ?? "-"} transactions`;
   els.activityDetailApprover.textContent = approvalApproverText(approval);
   els.activityDetailApprover.classList.remove("hidden");
-  els.activityDetailSummary.textContent = `${totalText(approval.totals) || "-"} · Approved ${approvalTimeText(approval)} · ${shortBundleId(approval.bundle_id)}`;
+  els.activityDetailSummary.textContent = [
+    totalText(approval.totals) || "-",
+    `Approved ${approvalTimeText(approval)}`,
+    bankSubmissionText(approval.bank_submission),
+    shortBundleId(approval.bundle_id)
+  ].filter(Boolean).join(" · ");
   els.activityDetailTableWrap.classList.remove("hidden");
   els.activityDetailClose.classList.remove("hidden");
   renderPaymentRows(els.activityDetailRows, visiblePaymentsFromApproval(approval), "Payment details unavailable");
@@ -425,11 +471,23 @@ function renderPaymentRows(target, payments, emptyText = "-") {
     const row = document.createElement("tr");
     row.append(
       cell(payment.creditor_account || "-"),
-      cell(payment.remittance_text || "-"),
+      paymentTextCell(payment),
       cell(amountMinorToDecimal(payment.amount_minor, payment.currency), "numeric")
     );
     target.append(row);
   }
+}
+
+function paymentTextCell(payment) {
+  const value = cell(payment.remittance_text || "-");
+  const status = bankPaymentStatusText(payment);
+  if (status) {
+    const detail = document.createElement("span");
+    detail.className = "payment-status-line";
+    detail.textContent = status;
+    value.append(document.createElement("br"), detail);
+  }
+  return value;
 }
 
 function visiblePaymentsFromBundle(bundle) {
@@ -452,7 +510,12 @@ function visiblePaymentsFromApproval(approval) {
     creditor_account: payment?.creditor_account ?? "",
     remittance_text: payment?.remittance_text ?? "",
     amount_minor: payment?.amount_minor ?? "0",
-    currency: payment?.currency ?? ""
+    currency: payment?.currency ?? "",
+    bank_status: payment?.bank_status ?? "",
+    bank_payment_status: payment?.bank_payment_status ?? "",
+    bank_payment_status_reason: payment?.bank_payment_status_reason ?? "",
+    bank_payment_id: payment?.bank_payment_id ?? "",
+    bank_error: payment?.bank_error ?? ""
   }));
 }
 
@@ -647,7 +710,14 @@ async function approveBundle() {
     device_id: state.phoneSharePackage.device_id,
     share_index: state.phoneSharePackage.share_index,
     key_id: state.phoneSharePackage.key_id,
-    received_at: backendResult.received_at ?? new Date().toISOString()
+    received_at: backendResult.received_at ?? new Date().toISOString(),
+    bank_submission: backendResult.bank_submission ?? {
+      enabled: false,
+      status: "disabled",
+      payment_count: 0,
+      total_payment_count: state.bundle.payment_inputs.length,
+      payments: []
+    }
   };
   state.recentApprovals.unshift(activity);
   setResult({

@@ -645,6 +645,12 @@ tr:last-child td {
   text-align: center;
 }
 
+.payment-status-line {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.25;
+}
+
 .approval-footer {
   margin-top: 16px;
 }

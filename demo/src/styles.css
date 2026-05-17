@@ -515,6 +515,12 @@ pre {
   background: #fff0f0;
 }
 
+.payment-status-line {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
 .activity-panel {
   display: grid;
   gap: 10px;
