@@ -9,7 +9,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "ce6705aa6921ceb6b3ae6fb33af8048c7f85531bfe0e9cd7db6066e31d1028ed"
+      "sha256": "cf9e1bfa1253adc093566b1ac702cbec1b2b22e2b1315984a6615802d93fc8ad"
     },
     {
       "path": "kernel.html",
@@ -21,15 +21,15 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "c8d0831f5e4308e8dd588b5e38ff79e8cbdc21376a273da9fb956e00e819b132"
+      "sha256": "8d7d7d2af90e722be02d27e20c91168c641155c2b5e3a4d600b8fe0ab11d2cd1"
     },
     {
       "path": "src/api-client.js",
-      "sha256": "9032f23b3997ab97f57180da58d52fec5e52b089632c053212a0d0d1d4915d6a"
+      "sha256": "0f350ea5ae6731468d1b42c8c6eeb2db3a94145ec634876708e609a082790203"
     },
     {
       "path": "src/app.js",
-      "sha256": "fb59e91e3f3297048d8b8f733edd0a8f3e600a0983780716aad85b04c5dc1d82"
+      "sha256": "e6b9052f4607b911eeb04db31c86c58ca69641db5e409ee700238fea3d005f74"
     },
     {
       "path": "src/approval-kernel.js",
@@ -41,7 +41,7 @@
     },
     {
       "path": "src/backup-recovery.js",
-      "sha256": "693dfd39304e618b77facd9e78d295d3dd361fb2bac95b39d7ddec58df77bd47"
+      "sha256": "6dde90e42087f5d708e9fde3e6ee01796c6af0c77a0b11f4a0efe482c5db33a8"
     },
     {
       "path": "src/bank-signing-batch.js",
@@ -85,7 +85,7 @@
     },
     {
       "path": "src/core/protocol/signing.js",
-      "sha256": "70b85f52ca236ab0e6ca7e8ed48711fe6d239e31574264c071a07534c1ea834f"
+      "sha256": "e33f6188fc66ebb7e3adb89c0608e5924094dbffab0dc0b9484a18822a8e70cb"
     },
     {
       "path": "src/force-update.js",
@@ -125,7 +125,7 @@
     },
     {
       "path": "src/response-schemas.js",
-      "sha256": "ce3affea70d5e7c27a676299453d2f9b1a63c4f369f83ec426dac22b828f8151"
+      "sha256": "bf9352e5a17466b1c735a75c3d53257896137e94df561e668b054e4aeaa7344b"
     },
     {
       "path": "src/sign-task-worker.js",

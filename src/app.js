@@ -1,5 +1,4 @@
 import {
-  attestMigration,
   enrollApprovalCredential,
   fetchPendingBundles,
   fetchRecentApprovals,
@@ -8,7 +7,6 @@ import {
 } from "./api-client.js";
 import { decodeEncryptedBackupQrV1, encryptBackupQrV1, validateEncryptedBackupQrV1 } from "./backup-recovery.js";
 import { utf8Decode, utf8Encode } from "./core/crypto/bytes.js";
-import { webauthnEnrollmentStepUpChallengeV1 } from "./core/protocol/envelopes.js";
 import { decodePhoneSharePackageV1 } from "./core/protocol/signing.js";
 import {
   createMultipartReassembler,
@@ -86,7 +84,6 @@ const ids = [
   "finishQrEnrollmentButton",
   "createBackupButton",
   "startMigrationButton",
-  "confirmDeviceButton",
   "enrollmentFile",
   "qrScanner",
   "qrScannerTitle",
@@ -950,7 +947,6 @@ function renderEnrollment() {
   els.enablePrfButton.classList.toggle("hidden", !canEnablePrfStorage());
   els.createBackupButton.classList.toggle("hidden", !enrolled);
   els.startMigrationButton.classList.toggle("hidden", !(enrolled && state.migrationRequired));
-  els.confirmDeviceButton.classList.toggle("hidden", !enrolled);
   renderUnlockGate();
   renderIntegrity();
   renderQrEnrollment();
@@ -1375,16 +1371,6 @@ async function scanQrFrame(detector) {
 // Routes a decoded QR value by scan mode. Returns true when scanning is complete
 // (camera stopped); false to keep scanning (e.g. waiting for more backup frames).
 async function handleScannedValue(rawValue) {
-  if (state.qrScanMode === "migration-confirm") {
-    const payload = parseMigrationStepUpPayload(rawValue);
-    if (!payload) {
-      return false;
-    }
-    stopQrScanner();
-    await confirmDeviceFromPayload(payload);
-    return true;
-  }
-
   // enroll / recovery scan: a single enrollment package, or a multi-part backup.
   if (rawValue.startsWith(MULTIPART_PREFIX)) {
     const result = await state.backupReassembler.accept(rawValue);
@@ -1408,28 +1394,6 @@ async function handleScannedValue(rawValue) {
   state.pendingQrPackage = parseEnrollmentPackageText(rawValue);
   await finishScannedEnrollment();
   return true;
-}
-
-function parseMigrationStepUpPayload(rawValue) {
-  let parsed;
-  try {
-    parsed = JSON.parse(rawValue);
-  } catch {
-    return null;
-  }
-  if (parsed?.v !== "migration_step_up_v1") {
-    return null;
-  }
-  const required = [
-    "migration_id", "approver_id", "device_id", "share_index", "key_id",
-    "new_credential_id", "new_public_key_spki_base64url", "challenge_nonce", "challenge_nonce_expires_at"
-  ];
-  for (const field of required) {
-    if (parsed[field] === undefined || parsed[field] === null || parsed[field] === "") {
-      return null;
-    }
-  }
-  return parsed;
 }
 
 async function openScanner(mode) {
@@ -1472,21 +1436,12 @@ async function openScanner(mode) {
     // autoplay + muted + playsinline restart playback on their own; a rejected
     // play() (common right after the element is revealed) must not abort scanning.
   }
-  setStatus(mode === "migration-confirm"
-    ? "Scan the new device's migration code"
-    : "Scanning enrollment QR");
+  setStatus("Scanning enrollment QR");
   scanQrFrame(detector);
 }
 
 async function startQrEnrollment() {
   await openScanner("enroll");
-}
-
-async function startConfirmDeviceScan() {
-  if (!state.phoneSharePackage || !state.webauthnCredential?.credential_id) {
-    throw new Error("Enroll this device before confirming another");
-  }
-  await openScanner("migration-confirm");
 }
 
 async function finishQrEnrollment() {
@@ -1498,9 +1453,9 @@ async function finishQrEnrollment() {
 
 // Called once a package is scanned (state.pendingQrPackage set). Stops the camera
 // but keeps the modal open — switching it from viewfinder to enroll panel — then
-// tries to finish automatically (like the migration-confirm scan). Auto-enroll
-// usually works; if the passkey ceremony needs a fresh user gesture the panel
-// stays put with a full-size Enroll button to tap, rather than dumping the user
+// tries to finish enrollment automatically. Auto-enroll usually works; if the
+// passkey ceremony needs a fresh user gesture the panel stays put with a
+// full-size Enroll button to tap, rather than dumping the user
 // to a truncatable status line.
 async function finishScannedEnrollment() {
   state.qrEnrollPending = true;
@@ -1644,9 +1599,9 @@ async function createAndExportBackup() {
 }
 
 // Feature B (new phone): ask the backend to register this device's freshly minted
-// passkey for the already-enrolled context. The backend stores it as PENDING and
-// returns a step-up nonce; this device shows a step-up QR for the OLD phone to
-// confirm, then polls until an operator approves.
+// passkey for the already-enrolled context. The backend stores it as PENDING
+// (awaiting_approval) on share-possession proof, then this device polls until an
+// operator approves it on the backend. There is no old-phone confirmation step.
 async function startMigration() {
   const pkg = state.phoneSharePackage;
   const credential = state.webauthnCredential;
@@ -1669,23 +1624,7 @@ async function startMigration() {
     allowed_origins: [window.location.origin]
   }, pkg, state.backendOrigin);
   state.pendingMigrationId = result.migration_id;
-  const stepUpPayload = {
-    v: "migration_step_up_v1",
-    migration_id: result.migration_id,
-    approver_id: pkg.approver_id,
-    device_id: pkg.device_id,
-    share_index: pkg.share_index,
-    key_id: pkg.key_id,
-    new_credential_id: credential.credential_id,
-    new_public_key_spki_base64url: credential.public_key_spki_base64url,
-    challenge_nonce: result.challenge_nonce,
-    challenge_nonce_expires_at: result.challenge_nonce_expires_at
-  };
-  showQrModal({
-    title: "Confirm on your old device",
-    text: "On your OLD phone open Settings → Confirm New Device and scan this code. Then an operator must approve the migration on the backend."
-  });
-  startQrAnimation([JSON.stringify(stepUpPayload)]);
+  setStatus("Migration requested. An operator must approve it on the backend — keep this open; the device activates automatically once approved.");
   pollMigrationUntilResolved(result.migration_id);
 }
 
@@ -1733,54 +1672,6 @@ function pollMigrationUntilResolved(migrationId) {
     }
   };
   tick();
-}
-
-// Feature B (old phone): confirm a new device by signing the step-up challenge
-// with THIS device's existing passkey, proving the second factor. The backend
-// recomputes the same challenge from its stored record and verifies it.
-async function confirmDeviceFromPayload(payload) {
-  const pkg = state.phoneSharePackage;
-  const credential = state.webauthnCredential;
-  if (!pkg || !credential?.credential_id) {
-    throw new Error("This device is not enrolled");
-  }
-  if (!state.backendOrigin) {
-    throw new Error("Configure the backend before confirming a device");
-  }
-  // Validate the scanned request locally BEFORE prompting WebAuthn: a tampered or
-  // foreign QR would otherwise burn the single-use step-up nonce on a doomed
-  // assertion (leaving the real request stuck) and pop a confusing passkey prompt.
-  if (!/^mig-[A-Za-z0-9_-]+$/u.test(payload.migration_id)) {
-    throw new Error("Scanned code is not a valid migration request");
-  }
-  if (
-    payload.approver_id !== pkg.approver_id ||
-    payload.device_id !== pkg.device_id ||
-    payload.share_index !== pkg.share_index ||
-    payload.key_id !== pkg.key_id
-  ) {
-    throw new Error("Scanned code is for a different approver context");
-  }
-  setStatus("Confirming the new device with your passkey…");
-  const challengeBytes = await webauthnEnrollmentStepUpChallengeV1({
-    approver_id: payload.approver_id,
-    device_id: payload.device_id,
-    share_index: payload.share_index,
-    key_id: payload.key_id,
-    new_credential_id: payload.new_credential_id,
-    new_public_key_spki_base64url: payload.new_public_key_spki_base64url,
-    challenge_nonce: payload.challenge_nonce,
-    challenge_nonce_expires_at: payload.challenge_nonce_expires_at
-  });
-  const assertion = await requestApprovalAssertion({
-    credentialId: credential.credential_id,
-    challengeBytes
-  });
-  await attestMigration(payload.migration_id, {
-    version: "migration_attest_v1",
-    step_up_assertion: assertion
-  }, pkg, state.backendOrigin);
-  setStatus("New device confirmed. An operator must now approve the migration on the backend.");
 }
 
 async function resetEnrollment() {
@@ -1966,10 +1857,6 @@ async function init() {
   }));
   els.startMigrationButton.addEventListener("click", () => startMigration().catch((error) => {
     hideQrModal();
-    setStatus(error.message, "error");
-  }));
-  els.confirmDeviceButton.addEventListener("click", () => startConfirmDeviceScan().catch((error) => {
-    stopQrScanner();
     setStatus(error.message, "error");
   }));
   els.qrModalClose.addEventListener("click", () => hideQrModal());

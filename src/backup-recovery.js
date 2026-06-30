@@ -467,7 +467,9 @@ const REQUIRED_KEYS = [
 // AES-GCM additional authenticated data: the canonical header (every field
 // except the ciphertext). Binding it means kdf params, version, created_at,
 // salt/nonce etc. cannot be swapped without breaking decryption (issue #40 AAD).
-function backupAad(payload) {
+// Exported so the offline ceremony tooling (issue #39) can build the byte-
+// identical AAD without reimplementing it.
+export function backupAad(payload) {
   const { ciphertext_base64url, ...header } = payload;
   void ciphertext_base64url;
   return canonicalJsonBytes(header);
@@ -536,18 +538,14 @@ export function deriveBackupKey(passphrase, payload) {
   });
 }
 
-// Decodes + decrypts an encrypted_backup_qr_v1 payload with the user's
-// passphrase and returns the recovered, strictly-validated share package.
-// `deriveKey` is injectable so the wiring can be tested without paying the full
-// Argon2id cost (the primitive itself is covered by the RFC 9106 KAT).
-export async function decodeEncryptedBackupQrV1(payload, passphrase, { deriveKey = deriveBackupKey } = {}) {
-  validateEncryptedBackupQrV1(payload);
-  assert(typeof passphrase === "string" && passphrase.length > 0, "backup passphrase is required");
-  // The approval app only ever imports phone shares. Refuse company-share
-  // backups here rather than returning unvalidated attacker JSON (issue #40).
-  assert(payload.plaintext_schema === "phone_share_package_v1", "only phone_share_package_v1 backups can be recovered in the approval app");
-
-  const keyBytes = await deriveKey(passphrase, payload);
+// Gate-neutral AES-256-GCM decrypt + JSON parse of an already strictly-validated
+// encrypted_backup_qr_v1 payload, using the byte-identical AAD. It deliberately
+// makes NO judgement about which plaintext_schema is acceptable — that gate is
+// the caller's (the phone path below allows only phone shares; the offline
+// company-recovery tool allows only company shares). Factored out (issue #39 §7)
+// so the company-recovery tool reuses this exact decrypt path rather than
+// duplicating the cipher/AAD wiring.
+export async function decryptValidatedBackupQrV1(payload, keyBytes) {
   assert(keyBytes instanceof Uint8Array && keyBytes.length === payload.kdf.output_len, "derived backup key has the wrong length");
   const key = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["decrypt"]);
 
@@ -567,12 +565,27 @@ export async function decodeEncryptedBackupQrV1(payload, passphrase, { deriveKey
     throw new Error("backup decryption failed (wrong passphrase, tampered header, or corrupt backup)");
   }
 
-  let plaintext;
   try {
-    plaintext = JSON.parse(utf8Decode(plaintextBytes));
+    return JSON.parse(utf8Decode(plaintextBytes));
   } catch {
     throw new Error("backup plaintext is not valid JSON");
   }
+}
+
+// Decodes + decrypts an encrypted_backup_qr_v1 payload with the user's
+// passphrase and returns the recovered, strictly-validated share package.
+// `deriveKey` is injectable so the wiring can be tested without paying the full
+// Argon2id cost (the primitive itself is covered by the RFC 9106 KAT).
+export async function decodeEncryptedBackupQrV1(payload, passphrase, { deriveKey = deriveBackupKey } = {}) {
+  validateEncryptedBackupQrV1(payload);
+  assert(typeof passphrase === "string" && passphrase.length > 0, "backup passphrase is required");
+  // The approval app only ever imports phone shares. Refuse company-share
+  // backups here (BEFORE deriving any key) rather than returning unvalidated
+  // attacker JSON (issue #40).
+  assert(payload.plaintext_schema === "phone_share_package_v1", "only phone_share_package_v1 backups can be recovered in the approval app");
+
+  const keyBytes = await deriveKey(passphrase, payload);
+  const plaintext = await decryptValidatedBackupQrV1(payload, keyBytes);
 
   assert(plaintext?.version === payload.plaintext_schema, "backup plaintext schema mismatch");
   decodePhoneSharePackageV1(plaintext);

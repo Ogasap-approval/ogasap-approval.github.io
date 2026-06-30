@@ -19,9 +19,38 @@ const HEX_64 = /^[a-f0-9]{64}$/u;
 const SUPPORTED_MODULUS_BYTES = new Set([256, 384, 512]);
 const PUBLIC_EXPONENT = 65537;
 
+// The exact property set of schemas/phone_share_package_v1.schema.json
+// (additionalProperties:false). Used to reject attacker-injected fields, mirroring
+// assertExactKeys in backup-recovery.js (Codex MED #3).
+const PHONE_SHARE_PACKAGE_KEYS = [
+  "version",
+  "key_id",
+  "certificate_fingerprint_sha256",
+  "approver_id",
+  "device_id",
+  "share_index",
+  "threshold",
+  "players",
+  "circl_version",
+  "rsa_modulus_base64url",
+  "rsa_public_exponent",
+  "share_si_base64url",
+  "created_at"
+];
+
 function assertPattern(name, value, pattern) {
   if (typeof value !== "string" || !pattern.test(value)) {
     throw new RangeError(`${name} is invalid`);
+  }
+}
+
+// Rejects any property outside the schema's allowed set (additionalProperties:false),
+// the way assertExactKeys does in backup-recovery.js (Codex MED #3).
+function assertNoUnexpectedKeys(object, allowedKeys, label) {
+  for (const key of Object.keys(object)) {
+    if (!allowedKeys.includes(key)) {
+      throw new Error(`${label} has unexpected field ${key}`);
+    }
   }
 }
 
@@ -29,6 +58,7 @@ export function decodePhoneSharePackageV1(pkg) {
   if (pkg?.version !== "phone_share_package_v1") {
     throw new Error("unsupported phone share package version");
   }
+  assertNoUnexpectedKeys(pkg, PHONE_SHARE_PACKAGE_KEYS, "phone share package");
   assertPattern("key_id", pkg.key_id, ID_8_128);
   assertPattern("certificate_fingerprint_sha256", pkg.certificate_fingerprint_sha256, HEX_64);
   assertPattern("approver_id", pkg.approver_id, APPROVER_ID);

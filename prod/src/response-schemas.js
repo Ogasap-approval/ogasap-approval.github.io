@@ -148,22 +148,9 @@ export const RESPONSE_SCHEMAS = {
   migration_request_response_v1: schema("migration_request_response_v1", {
     type: "object",
     additionalProperties: false,
-    required: ["version", "ok", "migration_id", "challenge_nonce", "challenge_nonce_expires_at", "status"],
-    properties: {
-      version: { const: "migration_request_response_v1" },
-      ok: { const: true },
-      migration_id: { type: "string", minLength: 20, maxLength: 128, pattern: "^mig-[A-Za-z0-9_-]+$" },
-      challenge_nonce: { type: "string", minLength: 16, maxLength: 256, pattern: BASE64URL_PATTERN },
-      challenge_nonce_expires_at: { type: "string", format: "date-time" },
-      status: { const: "awaiting_step_up" }
-    }
-  }),
-  migration_attest_response_v1: schema("migration_attest_response_v1", {
-    type: "object",
-    additionalProperties: false,
     required: ["version", "ok", "migration_id", "status"],
     properties: {
-      version: { const: "migration_attest_response_v1" },
+      version: { const: "migration_request_response_v1" },
       ok: { const: true },
       migration_id: { type: "string", minLength: 20, maxLength: 128, pattern: "^mig-[A-Za-z0-9_-]+$" },
       status: { const: "awaiting_approval" }
@@ -177,7 +164,7 @@ export const RESPONSE_SCHEMAS = {
       version: { const: "migration_status_response_v1" },
       ok: { const: true },
       migration_id: { type: "string", minLength: 20, maxLength: 128, pattern: "^mig-[A-Za-z0-9_-]+$" },
-      status: { type: "string", enum: ["not_found", "awaiting_step_up", "awaiting_approval", "approved", "rejected"] }
+      status: { type: "string", enum: ["not_found", "awaiting_approval", "approved", "rejected"] }
     }
   }),
   backend_response_envelope_v1: schema("backend_response_envelope_v1", {

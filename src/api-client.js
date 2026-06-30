@@ -255,10 +255,9 @@ export async function enrollApprovalCredential(enrollment, phoneSharePackage, ba
 
 // New-phone migration (server-approved): the new phone proves share-possession
 // (the signed backend-auth header) and asks the backend to register its freshly
-// minted passkey. The backend stores it as PENDING and returns a step-up
-// challenge nonce; it does NOT register anything until (a) the OLD passkey
-// attests and (b) an operator approves. All three calls reuse the same signed
-// auth + signed-response verification as the rest of the API.
+// minted passkey. The backend stores it as PENDING (awaiting_approval) and does
+// NOT register anything until an operator approves. Both calls reuse the same
+// signed auth + signed-response verification as the rest of the API.
 export async function requestMigration(request, phoneSharePackage, backendOrigin) {
   const body = JSON.stringify(request);
   const bodyBytes = utf8Encode(body);
@@ -285,38 +284,6 @@ export async function requestMigration(request, phoneSharePackage, backendOrigin
     requestClientNonce: auth.clientNonce
   });
   return validateResponseBody("migration_request_response_v1", result);
-}
-
-// OLD phone: submit the step-up assertion (signed by the existing passkey) for a
-// pending migration. The path carries the migration id, so the signed-response
-// attestation binds to that exact path.
-export async function attestMigration(migrationId, request, phoneSharePackage, backendOrigin) {
-  const path = `${MIGRATION_REQUEST_PATH}/${migrationId}/attest`;
-  const body = JSON.stringify(request);
-  const bodyBytes = utf8Encode(body);
-  const auth = await signedApprovalHeaders({
-    method: "POST",
-    path,
-    bodyBytes,
-    phoneSharePackage,
-    backendOrigin
-  });
-  const response = await fetch(apiUrl(path, {}, backendOrigin), {
-    method: "POST",
-    headers: {
-      ...auth.headers,
-      "Content-Type": "application/json"
-    },
-    body
-  });
-  const result = await verifiedJsonResponse(response, {
-    method: "POST",
-    path,
-    phoneSharePackage,
-    requestServerNonce: auth.serverNonce,
-    requestClientNonce: auth.clientNonce
-  });
-  return validateResponseBody("migration_attest_response_v1", result);
 }
 
 // NEW phone: poll a pending migration's status until an operator approves/rejects.
