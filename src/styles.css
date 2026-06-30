@@ -182,6 +182,30 @@ input[type="url"] {
   text-align: center;
 }
 
+/* Shown in place of the viewfinder once a QR is scanned but auto-enroll could
+   not complete (e.g. the passkey ceremony needs a fresh tap). A full-size button
+   inside the modal, so the action does not depend on the truncatable status line. */
+.qr-enroll-prompt {
+  display: grid;
+  gap: 16px;
+  place-items: center;
+  padding: 12px 4px 4px;
+  text-align: center;
+}
+
+.qr-enroll-message {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--text);
+  white-space: pre-line;
+}
+
+.qr-enroll-button {
+  width: 100%;
+  min-height: 48px;
+  font-size: 1.05rem;
+}
+
 .qr-viewfinder {
   position: relative;
   overflow: hidden;

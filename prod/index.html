@@ -8,7 +8,7 @@
     <title>Approval</title>
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" href="./src/assets/icon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="./src/styles.css" integrity="sha256-wL5c+SeQqWZJz944ye9UAu9UyVp8OyTuHBAT/U27f0w=" crossorigin="anonymous">
+    <link rel="stylesheet" href="./src/styles.css" integrity="sha256-3HUM4lp6sFL/3Qv/HcDBhlF+nlvxknSAEoPA1J4sqbM=" crossorigin="anonymous">
   </head>
   <body>
     <header class="app-header">
@@ -87,14 +87,18 @@
         <div id="qrScanner" class="qr-scanner hidden" role="dialog" aria-modal="true" aria-label="Scan QR code">
           <div class="qr-scanner-panel">
             <div class="qr-scanner-header">
-              <h2>Scan QR</h2>
-              <button id="cancelQrScanButton" type="button" class="secondary compact-button">Cancel Scan</button>
+              <h2 id="qrScannerTitle">Scan QR</h2>
+              <button id="cancelQrScanButton" type="button" class="secondary compact-button">Cancel</button>
             </div>
-            <div class="qr-viewfinder" aria-label="Camera preview">
+            <div id="qrViewfinder" class="qr-viewfinder" aria-label="Camera preview">
               <video id="qrVideo" class="qr-video" autoplay muted playsinline></video>
               <div class="qr-frame" aria-hidden="true"></div>
             </div>
-            <p class="status-line qr-scan-hint">Fill the frame with the QR code and hold steady.</p>
+            <p id="qrScanHint" class="status-line qr-scan-hint">Fill the frame with the QR code and hold steady.</p>
+            <div id="qrEnrollPrompt" class="qr-enroll-prompt hidden">
+              <p id="qrEnrollMessage" class="qr-enroll-message">Tap Enroll to finish with your passkey.</p>
+              <button id="modalEnrollButton" type="button" class="qr-enroll-button">Enroll</button>
+            </div>
           </div>
         </div>
       </section>

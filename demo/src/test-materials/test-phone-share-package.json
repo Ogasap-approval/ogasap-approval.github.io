@@ -1,16 +1,15 @@
 {
   "version": "phone_share_package_v1",
-  "key_id": "test-rsa-2048-3of4-af8286d12da7",
-  "certificate_fingerprint_sha256": "af8286d12da76f632e641ddeadfd5faa112d660e2a8d089b5c74ec2a94dcd9a6",
+  "key_id": "test-rsa-2048-3of4-656f6df99596",
+  "certificate_fingerprint_sha256": "656f6df995967094909fa1168843562cd58a43a79d733f321a26b21f6022e2a4",
   "approver_id": "demo-approver",
   "device_id": "test-device-share-3",
   "share_index": 3,
   "threshold": 3,
   "players": 4,
   "circl_version": "v1.6.3",
-  "rsa_modulus_base64url": "uSuGnJ_kkl5h67KV531D714HQPYCmrPeMcFPZwzP0qYhyODADJrfVAOG5iP2AUido-oXoVz44Vx7JS7G6ugFlSOBKfU3JFLjMzIXXKvuaRaxZGFMZxZsof1n6Wm0qoUhgJeqZs_E23kgzVrKzkLJAyijLqSFT8yRKvFEbc-sK40oD2stt63E8U7FkavwRZEtJaTggW0FhlU-2K5rWR12X26rjSRnJwA08cAoL2V_FkVf3WQpGHkoLB9lGgGRaTv50joeZCAhOkli7E_-UP_L_qiYR1EybahnuvXrn41kuPBqP0lVaKUxKHHPkCR227PP79hAKtYS7ZleWK8mnfFh2Q",
+  "rsa_modulus_base64url": "sMRjAIpkGIzV-E9wUuMqyeSPDSdTA0Md4tSfiQeYVhC_LEK42iPM7_S39LiPJ1AjTT_RSn1Mi3Peo8BxuV9dN5X-_fFV081YTbCp12fgbiN5jR5Q1xWyWVVINsPBVX9HWs22p7u99Mh7oRa4BL3hIMGrk0zoCsYgUMnBeygEQf3rnVZTSxiQ0fp0OlOF5edRZq5JDlL_7Exro2nfbuCSU2q9h0fmJxvL23xmsD1FTuH6q9R2jdKX_pyr5kZBBuQ66WEIQ785MU6nOBBCMJK4tmNBmQmlzmhQ19Kzv0x-lDn9xQxScF4YM8CfzeMJJvZMutnR_h3ZEifEXP1yPNQSaQ",
   "rsa_public_exponent": 65537,
-  "share_si_base64url": "D3_Q-Mt3MJjHZPbuuEjZY9O9Ps8brG9MCMObI0U6GxarMgQn6ZL6dr2gyIhPecfs6cz29mS9Dgrmja6SezwInP7KyJrlLE0AbWI5TzKX9d6rVPs9sgM3qheotRXBFlhDf6cNtI2esmfDsXLtLMHfp-V3bt9Yq0_wnyq6cAc2p7xMTiqK9BgCaFgZb6BlewtLGNiIFmKHqyAn2AYu0U8ORMmWZhvXC5IaF2PF071d8vtfR4vT_RHfq6qMSNfc0oHxnkW75yJZ6gT4ZQNMUiK2Ti_eUiBwODw_zraW9Ry1y86cQ4ozYd2ydOG0a1QrIVIURbf-vyV_DQTxGqJcN9QWyg",
-  "created_at": "2026-05-15T12:52:34Z",
-  "test_only": true
+  "share_si_base64url": "DCrc75p3WQkYhT4o9CIOVGhe3HjtYTQIzT8x-hyHBszEDBYNGkAJpjIQn8xud7Z_xOf2QcQNgLPticHax8KmKzOpnBdIclC5g2Y6dYk98YGPVoi4VyhMQSGaHZR60-08gLehehkykiga9rwEUzBSsB5SGeEaniWX6P2BFeaNBQjBslSqVQX87q269ocecv11bTZqHJ6Hp-16vZTVxIZp-5UfdrMPM0IvC1FQj9Zxo-GvmodE-lkqLTiGsefJOuxsU5WPhSpGTofeJJi3n-A3_5um20RxEv0ycOaLuJz5mjsKBkUIfAK9jhRyJZYj4pR9u5VtSm3MHvuU5N80ibOwSA",
+  "created_at": "2026-06-30T12:48:22Z"
 }

@@ -89,7 +89,13 @@ const ids = [
   "confirmDeviceButton",
   "enrollmentFile",
   "qrScanner",
+  "qrScannerTitle",
+  "qrViewfinder",
   "qrVideo",
+  "qrScanHint",
+  "qrEnrollPrompt",
+  "qrEnrollMessage",
+  "modalEnrollButton",
   "cancelQrScanButton",
   "qrModal",
   "qrModalTitle",
@@ -138,6 +144,7 @@ const state = {
   qrScanMode: "enroll",
   backupReassembler: null,
   pendingQrPackage: null,
+  qrEnrollPending: false,
   qrFrames: [],
   qrFrameIndex: 0,
   qrAnimTimer: 0,
@@ -900,7 +907,15 @@ function renderIntegrity() {
 
 function renderQrEnrollment() {
   const scanning = Boolean(state.qrStream);
-  els.qrScanner.classList.toggle("hidden", !scanning);
+  // After a successful scan we keep the same modal open but swap the viewfinder
+  // for an enroll panel (a big Enroll button) instead of dropping the user back
+  // to the settings card to find a tiny button / read a truncated status line.
+  const enrollPrompt = state.qrEnrollPending && Boolean(state.pendingQrPackage);
+  els.qrScanner.classList.toggle("hidden", !(scanning || enrollPrompt));
+  els.qrViewfinder.classList.toggle("hidden", !scanning);
+  els.qrScanHint.classList.toggle("hidden", !scanning);
+  els.qrEnrollPrompt.classList.toggle("hidden", !enrollPrompt);
+  els.qrScannerTitle.textContent = enrollPrompt ? "Finish enrollment" : "Scan QR";
   els.scanEnrollmentButton.disabled = scanning;
   els.finishQrEnrollmentButton.classList.toggle("hidden", !state.pendingQrPackage);
 }
@@ -1384,16 +1399,14 @@ async function handleScannedValue(rawValue) {
     }
     if (result.status === "complete") {
       state.pendingQrPackage = validateEnrollmentPackage(JSON.parse(utf8Decode(result.bytes)));
-      stopQrScanner();
-      setStatus("Backup scanned. Tap Enroll QR to finish with WebAuthn.");
+      await finishScannedEnrollment();
       return true;
     }
     return false;
   }
 
   state.pendingQrPackage = parseEnrollmentPackageText(rawValue);
-  stopQrScanner();
-  setStatus("QR scanned. Tap Enroll QR to finish with WebAuthn.");
+  await finishScannedEnrollment();
   return true;
 }
 
@@ -1422,6 +1435,7 @@ function parseMigrationStepUpPayload(rawValue) {
 async function openScanner(mode) {
   state.qrScanMode = mode;
   state.pendingQrPackage = null;
+  state.qrEnrollPending = false;
   state.backupReassembler = createMultipartReassembler();
   renderQrEnrollment();
   const detector = await createQrDetector();
@@ -1480,6 +1494,48 @@ async function finishQrEnrollment() {
     throw new Error("Scan enrollment QR first");
   }
   await enrollFromParsedPackage(state.pendingQrPackage);
+}
+
+// Called once a package is scanned (state.pendingQrPackage set). Stops the camera
+// but keeps the modal open — switching it from viewfinder to enroll panel — then
+// tries to finish automatically (like the migration-confirm scan). Auto-enroll
+// usually works; if the passkey ceremony needs a fresh user gesture the panel
+// stays put with a full-size Enroll button to tap, rather than dumping the user
+// to a truncatable status line.
+async function finishScannedEnrollment() {
+  state.qrEnrollPending = true;
+  els.qrEnrollMessage.textContent = "Finishing enrollment with your passkey…";
+  stopQrScanner();
+  try {
+    await finishQrEnrollment();
+    state.qrEnrollPending = false;
+    renderQrEnrollment();
+  } catch {
+    // Most commonly the platform requires a fresh user gesture for the passkey
+    // ceremony; the raw error is unhelpful here, so just prompt for the tap.
+    els.qrEnrollMessage.textContent = "Tap Enroll to finish with your passkey.";
+    renderQrEnrollment();
+  }
+}
+
+// The in-modal Enroll button: a real user gesture, so the passkey ceremony is
+// allowed. On success the modal closes; on failure the (full-size) error stays
+// in the modal so it is readable, and the user can tap to retry.
+async function enrollFromModal() {
+  els.qrEnrollMessage.textContent = "Finishing enrollment with your passkey…";
+  try {
+    await finishQrEnrollment();
+    state.qrEnrollPending = false;
+  } catch (error) {
+    els.qrEnrollMessage.textContent = error.message;
+  }
+  renderQrEnrollment();
+}
+
+function dismissQrEnrollPrompt() {
+  state.qrEnrollPending = false;
+  state.pendingQrPackage = null;
+  renderQrEnrollment();
 }
 
 // A high-entropy (160-bit) recovery code in Crockford base32 (no I/L/O/U) — the
@@ -1747,6 +1803,7 @@ async function resetEnrollment() {
   state.recentApprovals = [];
   state.selectedApprovalId = "";
   state.pendingQrPackage = null;
+  state.qrEnrollPending = false;
   state.shareStorageRequiresPrfUnlock = false;
   state.backendOriginRequiresPrfUnlock = false;
   state.prfWrapKey = null;
@@ -1893,7 +1950,16 @@ async function init() {
   els.finishQrEnrollmentButton.addEventListener("click", () => finishQrEnrollment().catch((error) => {
     setStatus(error.message, "error");
   }));
-  els.cancelQrScanButton.addEventListener("click", () => stopQrScanner("QR scan cancelled"));
+  els.modalEnrollButton.addEventListener("click", () => enrollFromModal());
+  els.cancelQrScanButton.addEventListener("click", () => {
+    // Same control serves both modal modes: stop the camera while scanning, or
+    // dismiss the enroll panel once a scan is pending.
+    if (state.qrStream) {
+      stopQrScanner("QR scan cancelled");
+    } else {
+      dismissQrEnrollPrompt();
+    }
+  });
   els.createBackupButton.addEventListener("click", () => createAndExportBackup().catch((error) => {
     hideQrModal();
     setStatus(error.message, "error");
