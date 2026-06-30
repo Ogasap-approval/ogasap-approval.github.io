@@ -6,14 +6,11 @@ import {
   requestMigration
 } from "./api-client.js";
 import { decodeEncryptedBackupQrV1, encryptBackupQrV1, validateEncryptedBackupQrV1 } from "./backup-recovery.js";
-import { utf8Decode, utf8Encode } from "./core/crypto/bytes.js";
+import { utf8Decode } from "./core/crypto/bytes.js";
 import { decodePhoneSharePackageV1 } from "./core/protocol/signing.js";
 import {
   createMultipartReassembler,
-  encodeQrMatrix,
-  frameMultipartPayload,
-  MULTIPART_PREFIX,
-  renderQrToCanvas
+  MULTIPART_PREFIX
 } from "./qr-encode.js";
 import { assertAppIntegrity, loadIntegrityManifest } from "./integrity.js";
 import { amountMinorToDecimal } from "./payment-view.js";
@@ -44,7 +41,6 @@ import {
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
 const QR_SCAN_INTERVAL_MS = 250;
-const QR_ANIM_INTERVAL_MS = 500;
 const MIGRATION_POLL_INTERVAL_MS = 3000;
 const RECOVERY_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const ids = [
@@ -102,8 +98,6 @@ const ids = [
   "qrModalSecret",
   "qrModalSecretValue",
   "qrModalSecretCopy",
-  "qrCanvas",
-  "qrModalFrame",
   "resetButton",
   "recentCount",
   "recentApprovals",
@@ -144,9 +138,6 @@ const state = {
   backupReassembler: null,
   pendingQrPackage: null,
   qrEnrollPending: false,
-  qrFrames: [],
-  qrFrameIndex: 0,
-  qrAnimTimer: 0,
   migrationRequired: false,
   pendingMigrationId: "",
   migrationPollActive: false,
@@ -1038,12 +1029,24 @@ function validateEnrollmentPackage(pkg) {
 }
 
 async function recoverShareFromBackupQr(payload) {
-  const passphrase = window.prompt("Enter the backup passphrase to decrypt this share:");
-  if (!passphrase) {
+  const entered = window.prompt("Enter your backup recovery code:");
+  if (entered === null) {
     throw new Error("Backup recovery cancelled");
   }
+  // Don't gate on an exact length: new backups use a 25-char code, but backups
+  // made before the file-backup change used 32 — both must still restore. A wrong
+  // code can only be detected by the AES-GCM tag, so turn that late failure into a
+  // clear, actionable message instead of a generic decrypt error.
+  const passphrase = normalizeRecoveryCode(entered);
+  if (!passphrase) {
+    throw new Error("No recovery code entered");
+  }
   setStatus("Decrypting encrypted backup (Argon2id, this can take a few seconds)");
-  return decodeEncryptedBackupQrV1(payload, passphrase);
+  try {
+    return await decodeEncryptedBackupQrV1(payload, passphrase);
+  } catch (error) {
+    throw new Error("Could not decrypt the backup — check the recovery code for typos, or confirm this is the matching backup file.", { cause: error });
+  }
 }
 
 async function enrollFromParsedPackage(parsed) {
@@ -1544,19 +1547,21 @@ function dismissQrEnrollPrompt() {
   renderQrEnrollment();
 }
 
-// A high-entropy (160-bit) recovery code in Crockford base32 (no I/L/O/U) — the
-// secret that protects the encrypted backup QR. A backup QR is photographable,
-// so a weak user passphrase would be brute-forceable offline despite Argon2id;
-// a generated code removes that risk. Shown once for the user to store.
+// The recovery code is the secret that protects the encrypted backup file. It is
+// GENERATED (never user-chosen) so it can't be a weak, brute-forceable passphrase
+// despite Argon2id. 125 bits of entropy in Crockford base32 (no I/L/O/U), shown
+// once as five hyphen-separated 5-char groups — strong, yet feasible to write down.
+const RECOVERY_CODE_CHARS = 25; // 25 Crockford-base32 chars = 125 bits, drawn from 16 random bytes (the 3 trailing bits are discarded)
+
 function generateRecoveryCode() {
-  const bytes = crypto.getRandomValues(new Uint8Array(20));
+  const bytes = crypto.getRandomValues(new Uint8Array(Math.ceil((RECOVERY_CODE_CHARS * 5) / 8)));
   let bits = 0;
   let value = 0;
   let out = "";
   for (const byte of bytes) {
     value = (value << 8) | byte;
     bits += 8;
-    while (bits >= 5) {
+    while (bits >= 5 && out.length < RECOVERY_CODE_CHARS) {
       out += RECOVERY_CODE_ALPHABET[(value >>> (bits - 5)) & 31];
       bits -= 5;
     }
@@ -1564,6 +1569,26 @@ function generateRecoveryCode() {
   return out;
 }
 
+// Display form: five 5-char groups (XXXXX-XXXXX-XXXXX-XXXXX-XXXXX) for easy
+// hand-transcription. The hyphens are presentation only — not part of the secret.
+function formatRecoveryCode(code) {
+  return (code.match(/.{1,5}/gu) ?? [code]).join("-");
+}
+
+// Canonicalize a typed recovery code back to the exact string used as the Argon2id
+// passphrase: uppercase, drop separators/spaces, and fold the glyphs Crockford
+// base32 omits onto their intended characters (I/L->1, O->0, U->V) so an honest
+// mis-transcription still decrypts.
+function normalizeRecoveryCode(input) {
+  return (input ?? "")
+    .toUpperCase()
+    .replace(/[IL]/gu, "1")
+    .replace(/O/gu, "0")
+    .replace(/U/gu, "V")
+    .replace(/[^0-9A-Z]/gu, "");
+}
+
+// The backup modal only shows the recovery code now — there is no QR to render.
 function showQrModal({ title, text, secret = "" }) {
   els.qrModalTitle.textContent = title;
   els.qrModalText.textContent = text;
@@ -1578,38 +1603,7 @@ function showQrModal({ title, text, secret = "" }) {
 }
 
 function hideQrModal() {
-  stopQrAnimation();
   els.qrModal.classList.add("hidden");
-}
-
-function stopQrAnimation() {
-  if (state.qrAnimTimer) {
-    clearInterval(state.qrAnimTimer);
-    state.qrAnimTimer = 0;
-  }
-  state.qrFrames = [];
-  state.qrFrameIndex = 0;
-}
-
-// Renders one or more QR frames into the modal canvas. Multi-part backups cycle
-// (animate) so a phone-to-phone scan can collect every frame; a single frame
-// (the migration step-up) just renders once.
-function startQrAnimation(frames) {
-  stopQrAnimation();
-  state.qrFrames = frames;
-  state.qrFrameIndex = 0;
-  const draw = () => {
-    const frame = state.qrFrames[state.qrFrameIndex];
-    const matrix = encodeQrMatrix(utf8Encode(frame), { ecLevel: "M" });
-    renderQrToCanvas(matrix, els.qrCanvas, { moduleSize: 4 });
-    els.qrModalFrame.textContent = `Frame ${state.qrFrameIndex + 1} / ${state.qrFrames.length}`;
-    els.qrModalFrame.classList.toggle("hidden", state.qrFrames.length <= 1);
-    state.qrFrameIndex = (state.qrFrameIndex + 1) % state.qrFrames.length;
-  };
-  draw();
-  if (frames.length > 1) {
-    state.qrAnimTimer = setInterval(draw, QR_ANIM_INTERVAL_MS);
-  }
 }
 
 async function copyRecoveryCode() {
@@ -1622,9 +1616,24 @@ async function copyRecoveryCode() {
   }
 }
 
-// Feature A: create an encrypted backup of this device's phone share and render
-// it as a multi-part (animated) QR for a second device to scan. The share must
-// be unlocked in memory first (PRF/UV ceremony) before it can be re-encrypted.
+// Trigger a browser download of `data` (serialized as pretty JSON) under `filename`.
+function downloadJsonFile(filename, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  // Revoke on the next tick so the download has a chance to start first.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+// Feature A: create an encrypted backup of this device's phone share and download
+// it as a single encrypted file the user keeps somewhere safe. The generated
+// recovery code (shown once, stored apart from the file) is required to restore.
+// The share must be unlocked in memory first (PRF/UV ceremony) before re-encrypting.
 async function createAndExportBackup() {
   if (needsShareUnlock()) {
     await unlockPrfShare();
@@ -1639,14 +1648,14 @@ async function createAndExportBackup() {
     passphrase: recoveryCode,
     createdAt: new Date().toISOString()
   });
-  const frames = await frameMultipartPayload(utf8Encode(JSON.stringify(payload)));
+  const filename = `nofipa-share-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  downloadJsonFile(filename, payload);
   showQrModal({
-    title: "Encrypted backup",
-    text: `On the other device tap "Scan QR" and hold it over this screen until all ${frames.length} frames are captured. Store the recovery code below — it is required to restore and is shown only once.`,
-    secret: recoveryCode
+    title: "Encrypted backup saved",
+    text: `Saved "${filename}" — keep this file somewhere safe. To restore on another device, tap "Restore / Enroll", choose this file, then enter the recovery code below. You need BOTH the file and the code; the code is shown only once and is stored nowhere.`,
+    secret: formatRecoveryCode(recoveryCode)
   });
-  startQrAnimation(frames);
-  setStatus("Backup ready — scan all frames on the other device");
+  setStatus("Backup downloaded — save the recovery code shown.");
 }
 
 // Feature B (new phone): ask the backend to register this device's freshly minted

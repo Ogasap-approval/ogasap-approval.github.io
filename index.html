@@ -79,10 +79,10 @@
           <button id="unlockShareButton" type="button" class="secondary hidden">Unlock Share</button>
           <button id="scanEnrollmentButton" type="button" class="secondary">Scan QR</button>
           <button id="finishQrEnrollmentButton" type="button" class="secondary hidden">Enroll QR</button>
-          <button id="createBackupButton" type="button" class="secondary hidden">Create Backup</button>
+          <button id="createBackupButton" type="button" class="secondary hidden">Download Backup</button>
           <button id="startMigrationButton" type="button" class="secondary hidden">Request Migration</button>
           <label class="file-button">
-            <span>Enroll Package</span>
+            <span>Restore / Enroll</span>
             <input id="enrollmentFile" type="file" accept="application/json,.json">
           </label>
           <button id="resetButton" type="button" class="secondary">Reset</button>
@@ -200,10 +200,6 @@
           <code id="qrModalSecretValue" class="qr-secret-code">-</code>
           <button id="qrModalSecretCopy" type="button" class="secondary compact-button">Copy code</button>
         </div>
-        <div class="qr-display">
-          <canvas id="qrCanvas" class="qr-canvas" width="320" height="320" aria-label="QR code"></canvas>
-        </div>
-        <p id="qrModalFrame" class="status-line qr-frame-counter hidden">-</p>
       </div>
     </div>
 
