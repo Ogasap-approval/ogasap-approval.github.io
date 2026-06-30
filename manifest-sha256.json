@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "3938a9b91d4e67794b52cb425be683b3dce5106876a2f0a0123551023a4ba299"
+      "sha256": "38bdd9238970e3b690f3d424eed12cb9b389fdd7e5c9d4f7059b1ecce5ffee94"
     },
     {
       "path": "src/api-client.js",
@@ -29,7 +29,7 @@
     },
     {
       "path": "src/app.js",
-      "sha256": "29a02bbac34fa87476d91608028eb598b5f42b5d48d946dab89036b2e0cf86bb"
+      "sha256": "e2c49305c8a8918215cad2752bc8cf791c2ed41e6e7cdaaf3c0c76a4072c505e"
     },
     {
       "path": "src/approval-kernel.js",
@@ -121,7 +121,7 @@
     },
     {
       "path": "src/qr-decode.js",
-      "sha256": "ed75b9cdcc2ea2b5a072d3da0c3f4de016d26dca2501750f441b1efaa45198ad"
+      "sha256": "cc22965cabdddd87640aa62d1fa3f70170a5c3a718012623a304a1755a6e05af"
     },
     {
       "path": "src/qr-encode.js",

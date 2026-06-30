@@ -41,7 +41,11 @@ import {
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
-const QR_SCAN_INTERVAL_MS = 250;
+// Delay between decode attempts. The native BarcodeDetector decodes in ~no time,
+// and the jsQR fallback now decodes a downscaled frame (see qr-decode.js), so a
+// shorter interval gives more attempts/sec — catching a sharp, in-focus frame
+// sooner — without pegging the CPU during the brief scan.
+const QR_SCAN_INTERVAL_MS = 120;
 const MIGRATION_POLL_INTERVAL_MS = 3000;
 const RECOVERY_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const ids = [
