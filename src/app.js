@@ -1427,8 +1427,26 @@ async function openScanner(mode) {
   const detector = await createQrDetector();
   state.qrStream = await navigator.mediaDevices.getUserMedia({
     audio: false,
-    video: { facingMode: { ideal: "environment" } }
+    // Enrollment QR packages are dense (~150 modules / ~1.5 KB). BarcodeDetector
+    // reads the video's INTRINSIC frame, so the default capture (often 640x480)
+    // blurs the modules together and never decodes — even with the code filling
+    // the screen. Request HD; ideal (not exact) degrades gracefully on weaker
+    // cameras and never throws OverconstrainedError.
+    video: {
+      facingMode: { ideal: "environment" },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 }
+    }
   });
+  // Best-effort continuous autofocus for close-range scanning; advanced
+  // constraints are silently ignored where unsupported.
+  try {
+    await state.qrStream.getVideoTracks()[0]?.applyConstraints({
+      advanced: [{ focusMode: "continuous" }]
+    });
+  } catch {
+    // focusMode unsupported on this device — the fixed/auto focus still works.
+  }
   // Reveal the viewfinder BEFORE attaching the stream and calling play():
   // mobile browsers stall or reject play() on a still-hidden (display:none)
   // <video>, which previously left the camera live with no visible preview.

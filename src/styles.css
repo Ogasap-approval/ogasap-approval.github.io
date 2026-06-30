@@ -147,14 +147,39 @@ input[type="url"] {
   cursor: pointer;
 }
 
+/* Scanner is a centered overlay (not inline) so the viewfinder sits on top of
+   the app — the user never has to scroll the settings card to aim the camera. */
 .qr-scanner {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
   display: grid;
-  gap: 10px;
-  margin-top: 12px;
+  place-items: center;
+  margin: 0;
+  padding: 18px;
+  background: rgb(23 32 23 / 0.55);
+}
+
+.qr-scanner-panel {
+  display: grid;
+  gap: 12px;
+  width: min(460px, 100%);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 10px;
-  background: #f7fbf7;
+  border-radius: 10px;
+  padding: 16px;
+  background: var(--surface);
+  box-shadow: 0 18px 45px rgb(23 32 23 / 0.28);
+}
+
+.qr-scanner-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.qr-scan-hint {
+  text-align: center;
 }
 
 .qr-viewfinder {
@@ -162,7 +187,7 @@ input[type="url"] {
   overflow: hidden;
   width: 100%;
   min-height: 180px;
-  max-height: min(320px, 42dvh);
+  max-height: min(380px, 60dvh);
   aspect-ratio: 4 / 3;
   border-radius: 6px;
   background: #111;
@@ -946,10 +971,6 @@ tr:last-child td {
   .toolbar button,
   .button-row button,
   .file-button {
-    width: 100%;
-  }
-
-  .qr-scanner .compact-button {
     width: 100%;
   }
 

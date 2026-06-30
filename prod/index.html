@@ -8,7 +8,7 @@
     <title>Approval</title>
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" href="./src/assets/icon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="./src/styles.css" integrity="sha256-7KSidVZpO5cFl96QuEhE9bYhLP+8qQ8uiZrk1GyHFqA=" crossorigin="anonymous">
+    <link rel="stylesheet" href="./src/styles.css" integrity="sha256-wL5c+SeQqWZJz944ye9UAu9UyVp8OyTuHBAT/U27f0w=" crossorigin="anonymous">
   </head>
   <body>
     <header class="app-header">
@@ -84,12 +84,18 @@
           </label>
           <button id="resetButton" type="button" class="secondary">Reset</button>
         </div>
-        <div id="qrScanner" class="qr-scanner hidden">
-          <div class="qr-viewfinder" aria-label="Camera preview">
-            <video id="qrVideo" class="qr-video" autoplay muted playsinline></video>
-            <div class="qr-frame" aria-hidden="true"></div>
+        <div id="qrScanner" class="qr-scanner hidden" role="dialog" aria-modal="true" aria-label="Scan QR code">
+          <div class="qr-scanner-panel">
+            <div class="qr-scanner-header">
+              <h2>Scan QR</h2>
+              <button id="cancelQrScanButton" type="button" class="secondary compact-button">Cancel Scan</button>
+            </div>
+            <div class="qr-viewfinder" aria-label="Camera preview">
+              <video id="qrVideo" class="qr-video" autoplay muted playsinline></video>
+              <div class="qr-frame" aria-hidden="true"></div>
+            </div>
+            <p class="status-line qr-scan-hint">Fill the frame with the QR code and hold steady.</p>
           </div>
-          <button id="cancelQrScanButton" type="button" class="secondary compact-button">Cancel Scan</button>
         </div>
       </section>
 
