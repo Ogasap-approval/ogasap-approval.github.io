@@ -12,6 +12,7 @@ import {
   createMultipartReassembler,
   MULTIPART_PREFIX
 } from "./qr-encode.js";
+import { createQrDetector } from "./qr-decode.js";
 import { assertAppIntegrity, loadIntegrityManifest } from "./integrity.js";
 import { amountMinorToDecimal } from "./payment-view.js";
 import {
@@ -1375,20 +1376,6 @@ async function enrollFromPackageFile(file) {
   els.enrollmentFile.value = "";
 }
 
-async function createQrDetector() {
-  if (!("BarcodeDetector" in window)) {
-    throw new Error("QR scanning is unavailable in this browser. Use Enroll Package.");
-  }
-  if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error("Camera access is unavailable in this browser. Use Enroll Package.");
-  }
-  const supported = await window.BarcodeDetector.getSupportedFormats?.();
-  if (supported && !supported.includes("qr_code")) {
-    throw new Error("QR scanning is unavailable in this browser. Use Enroll Package.");
-  }
-  return new window.BarcodeDetector({ formats: ["qr_code"] });
-}
-
 function stopQrScanner(message = "") {
   if (state.qrScanTimer) {
     clearTimeout(state.qrScanTimer);
@@ -1466,7 +1453,12 @@ async function openScanner(mode) {
   state.qrEnrollPending = false;
   state.backupReassembler = createMultipartReassembler();
   renderQrEnrollment();
-  const detector = await createQrDetector();
+  // Native BarcodeDetector (Chromium) when it supports QR, else the vendored
+  // canvas+jsQR fallback for WebKit/iOS. Camera is the only hard requirement.
+  const detector = await createQrDetector({
+    hasCamera: Boolean(navigator.mediaDevices?.getUserMedia),
+    BarcodeDetector: globalThis.BarcodeDetector ?? null
+  });
   state.qrStream = await navigator.mediaDevices.getUserMedia({
     audio: false,
     // Enrollment QR packages are dense (~150 modules / ~1.5 KB). BarcodeDetector

@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "a19d573522802fc4cb93372cbad0aa7524716549d9a7986bdb59b6248b1da51a"
+      "sha256": "3938a9b91d4e67794b52cb425be683b3dce5106876a2f0a0123551023a4ba299"
     },
     {
       "path": "src/api-client.js",
@@ -29,7 +29,7 @@
     },
     {
       "path": "src/app.js",
-      "sha256": "3e19e82b4f297bb4c7274c3eda51df910546008807eb6ae7835d5dc5d729e3e4"
+      "sha256": "29a02bbac34fa87476d91608028eb598b5f42b5d48d946dab89036b2e0cf86bb"
     },
     {
       "path": "src/approval-kernel.js",
@@ -120,6 +120,10 @@
       "sha256": "6c7cb8e63d53b52bcb5992c4c9593b270fbf1b1011589dbf59ecd8b45ce8aa47"
     },
     {
+      "path": "src/qr-decode.js",
+      "sha256": "ed75b9cdcc2ea2b5a072d3da0c3f4de016d26dca2501750f441b1efaa45198ad"
+    },
+    {
       "path": "src/qr-encode.js",
       "sha256": "5df40d54fd84152bc437395aa45216be8bddac65256e81a38afdc6a2aec9c101"
     },
@@ -150,6 +154,14 @@
     {
       "path": "src/sw-integrity.js",
       "sha256": "78504887d9f48b80de903d4dd3136ae4cc5885749bc0006cb0d5d8229fd4bcd8"
+    },
+    {
+      "path": "src/vendor/jsqr.js",
+      "sha256": "eb2a29cc5eea6ae54883539bd53c44ddac9e669c4ffcd75fb8b3f4caa2554340"
+    },
+    {
+      "path": "src/vendor/jsqr.LICENSE",
+      "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
     },
     {
       "path": "src/webauthn.js",
