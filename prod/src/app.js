@@ -1045,7 +1045,17 @@ async function recoverShareFromBackupQr(payload) {
   try {
     return await decodeEncryptedBackupQrV1(payload, passphrase);
   } catch (error) {
-    throw new Error("Could not decrypt the backup — check the recovery code for typos, or confirm this is the matching backup file.", { cause: error });
+    // A wrong recovery code can ONLY be detected by the AES-GCM auth tag, which
+    // surfaces from backup-recovery.js as "backup decryption failed". Any OTHER
+    // error means the backup DID decrypt but its contents failed validation —
+    // surface that reason verbatim (it is structural, not secret) so a real
+    // format/shape problem is diagnosable instead of being hidden behind a
+    // generic "wrong code" message.
+    const reason = String(error?.message ?? "");
+    if (/decryption failed/iu.test(reason)) {
+      throw new Error("Wrong recovery code, or this is not the matching backup file — re-enter the code and try again.", { cause: error });
+    }
+    throw new Error(`Backup decrypted, but the share did not validate: ${reason}`, { cause: error });
   }
 }
 
