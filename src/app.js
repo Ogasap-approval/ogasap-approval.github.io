@@ -75,6 +75,7 @@ const ids = [
   "keyValue",
   "webauthnValue",
   "storageValue",
+  "appVersionValue",
   "appHashValue",
   "backendOriginInput",
   "saveBackendButton",
@@ -121,6 +122,7 @@ const state = {
   storagePersistent: null,
   integrityManifest: null,
   integrityError: null,
+  appVersion: "",
   backendOrigin: "",
   backendOriginRequiresPrfUnlock: false,
   shareStorageRequiresPrfUnlock: false,
@@ -902,6 +904,54 @@ function renderIntegrity() {
   els.appHashValue.title = state.integrityError?.message ?? "";
 }
 
+// The version shown in Settings is the active service worker's CACHE_NAME (the
+// build whose cached bytes are actually running). We display the trailing `v<N>`
+// tag and keep the full cache name as the hover title.
+function renderAppVersion() {
+  const cacheName = state.appVersion;
+  if (!cacheName) {
+    els.appVersionValue.textContent = "Checking";
+    els.appVersionValue.title = "";
+    return;
+  }
+  const match = cacheName.match(/v\d+$/u);
+  els.appVersionValue.textContent = match ? match[0] : cacheName;
+  els.appVersionValue.title = cacheName.startsWith("approval-") ? cacheName : "";
+}
+
+// Ask the controlling service worker which build it is (round-trip over a
+// MessageChannel). Resolves null when no worker controls the page yet (e.g. the
+// very first load before activation) or the worker doesn't answer in time.
+function requestServiceWorkerVersion(timeoutMs = 2000) {
+  return new Promise((resolve) => {
+    const controller = navigator.serviceWorker?.controller;
+    if (!controller) {
+      resolve(null);
+      return;
+    }
+    const channel = new MessageChannel();
+    const timer = setTimeout(() => resolve(null), timeoutMs);
+    channel.port1.onmessage = (event) => {
+      clearTimeout(timer);
+      resolve(typeof event.data?.cacheName === "string" ? event.data.cacheName : null);
+    };
+    try {
+      controller.postMessage({ type: "GET_VERSION" }, [channel.port2]);
+    } catch {
+      clearTimeout(timer);
+      resolve(null);
+    }
+  });
+}
+
+async function refreshAppVersion() {
+  const cacheName = await requestServiceWorkerVersion();
+  if (cacheName) {
+    state.appVersion = cacheName;
+    renderAppVersion();
+  }
+}
+
 function renderQrEnrollment() {
   const scanning = Boolean(state.qrStream);
   // After a successful scan we keep the same modal open but swap the viewfinder
@@ -949,6 +999,7 @@ function renderEnrollment() {
   els.startMigrationButton.classList.toggle("hidden", !(enrolled && state.migrationRequired));
   renderUnlockGate();
   renderIntegrity();
+  renderAppVersion();
   renderQrEnrollment();
   sendKernelState();
 }
@@ -1925,6 +1976,16 @@ async function init() {
         window.location.reload();
       });
     }
+
+    // Surface the active worker's build version in Settings: query once a worker
+    // controls the page, and re-query when a new worker takes over.
+    navigator.serviceWorker.ready.then(() => refreshAppVersion()).catch(() => {});
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      refreshAppVersion();
+    });
+  } else {
+    state.appVersion = "n/a";
+    renderAppVersion();
   }
 
   // Issue #26: gate every local-AES share unwrap behind a WebAuthn UV ceremony.

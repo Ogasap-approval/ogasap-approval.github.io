@@ -19,7 +19,7 @@ import {
   manifestPathForPrecacheUrl
 } from "./src/sw-integrity.js";
 
-const CACHE_NAME = "approval-approve-prod-v73";
+const CACHE_NAME = "approval-approve-prod-v74";
 const MANIFEST_URL = "./manifest-sha256.json";
 const PRECACHE_URLS = [
   "./",
@@ -96,6 +96,16 @@ self.addEventListener("activate", (event) => {
     ))
   );
   self.clients.claim();
+});
+
+self.addEventListener("message", (event) => {
+  // The Settings panel asks the active worker which build it is serving, so it can
+  // show the version alongside the app hash. CACHE_NAME is already public (a literal
+  // in this script), so replying with it leaks nothing. Reply on the provided
+  // MessageChannel port if present.
+  if (event.data?.type === "GET_VERSION") {
+    event.ports?.[0]?.postMessage({ type: "VERSION", cacheName: CACHE_NAME });
+  }
 });
 
 async function networkFirstThenVerifiedCache(request, url) {
