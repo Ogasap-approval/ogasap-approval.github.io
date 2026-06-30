@@ -1,8 +1,26 @@
+// Module service worker (registered with { type: "module" } in app.js).
+//
 // Bump the trailing -v<N> in CACHE_NAME whenever any file listed in PRECACHE_URLS
 // changes. The fetch handler is strict cache-first, so without a fresh CACHE_NAME
 // installed clients keep serving the previously cached copy indefinitely.
 // Enforced by tools/check-service-worker-cache.mjs in CI.
-const CACHE_NAME = "approval-approve-prod-v67";
+//
+// Issue #9: the precache is verified against pwa/manifest-sha256.json at install
+// time (assertBytesMatchManifest below). If any precached byte does not match
+// its pinned hash the install rejects and the new worker never activates, so the
+// cache can never be poisoned with bytes that disagree with the manifest. The
+// runtime integrity check (pwa/src/integrity.js) additionally appends
+// INTEGRITY_BYPASS_PARAM so its probes are answered network-first rather than
+// from this cache.
+import {
+  INTEGRITY_BYPASS_PARAM,
+  assertBytesMatchManifest,
+  expectedHashes,
+  manifestPathForPrecacheUrl
+} from "./src/sw-integrity.js";
+
+const CACHE_NAME = "approval-approve-prod-v69";
+const MANIFEST_URL = "./manifest-sha256.json";
 const PRECACHE_URLS = [
   "./",
   "./index.html",
@@ -13,15 +31,21 @@ const PRECACHE_URLS = [
   "./src/api-client.js",
   "./src/app.js",
   "./src/approval-kernel.js",
+  "./src/backup-recovery.js",
   "./src/bank-signing-batch.js",
+  "./src/bootstrap.js",
+  "./src/frame-buster.js",
+  "./src/frame-messaging.js",
   "./src/integrity.js",
   "./src/kernel-frame.js",
   "./src/payment-view.js",
   "./src/polling-capabilities.js",
+  "./src/qr-encode.js",
   "./src/sign-task-worker.js",
   "./src/signing-session.js",
   "./src/signing-worker-pool.js",
   "./src/storage.js",
+  "./src/sw-integrity.js",
   "./src/webauthn.js",
   "./src/assets/icon.svg",
   "./src/core/crypto/bigint.js",
@@ -39,8 +63,29 @@ const NETWORK_ONLY_PATHS = new Set([
   "/src/force-update.js"
 ]);
 
+async function installPrecache() {
+  const cache = await caches.open(CACHE_NAME);
+  const manifestResponse = await fetch(new Request(MANIFEST_URL, { cache: "no-store" }));
+  if (!manifestResponse.ok) {
+    throw new Error("integrity manifest unavailable during service worker install");
+  }
+  const manifestText = await manifestResponse.clone().text();
+  const expected = expectedHashes(JSON.parse(manifestText));
+
+  await Promise.all(PRECACHE_URLS.map(async (url) => {
+    const request = new Request(url, { cache: "no-store" });
+    const response = await fetch(request);
+    if (!response.ok) {
+      throw new Error(`precache fetch failed for ${url}`);
+    }
+    const bytes = new Uint8Array(await response.clone().arrayBuffer());
+    await assertBytesMatchManifest(expected, manifestPathForPrecacheUrl(url), bytes);
+    await cache.put(request, response);
+  }));
+}
+
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS)));
+  event.waitUntil(installPrecache());
   self.skipWaiting();
 });
 
@@ -52,6 +97,20 @@ self.addEventListener("activate", (event) => {
   );
   self.clients.claim();
 });
+
+async function networkFirstThenVerifiedCache(request, url) {
+  try {
+    return await fetch(request);
+  } catch (error) {
+    const canonical = new URL(url.href);
+    canonical.searchParams.delete(INTEGRITY_BYPASS_PARAM);
+    const cached = await caches.match(canonical.href);
+    if (cached) {
+      return cached;
+    }
+    throw error;
+  }
+}
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") {
@@ -69,6 +128,14 @@ self.addEventListener("fetch", (event) => {
 
   if (NETWORK_ONLY_PATHS.has(url.pathname) || url.searchParams.has("force_update")) {
     event.respondWith(fetch(event.request));
+    return;
+  }
+
+  // Runtime integrity probes must see authentic (network-true) bytes, never the
+  // cache they are meant to be checked against. Fall back to the install-verified
+  // cache only when offline.
+  if (url.searchParams.has(INTEGRITY_BYPASS_PARAM)) {
+    event.respondWith(networkFirstThenVerifiedCache(event.request, url));
     return;
   }
 

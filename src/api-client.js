@@ -8,13 +8,24 @@ import {
   signBackendAuthEnvelopeV1,
   signBackendResponseEnvelopeV1
 } from "./core/protocol/signing.js";
+import { assertMatchesSchema } from "./json-schema-validate.js";
+import { responseSchema } from "./response-schemas.js";
 
 const PENDING_BUNDLES_PATH = "/api/approval/pending-bundles";
 const RECENT_APPROVALS_PATH = "/api/approval/recent-approvals";
 const BACKEND_AUTH_NONCE_PATH = "/api/approval/backend-auth-nonce";
 const BUNDLE_APPROVAL_PATH = "/api/approval/bundle-approval";
+const WEBAUTHN_CHALLENGE_NONCE_PATH = "/api/approval/webauthn-challenge-nonce";
+const ENROLL_CREDENTIAL_PATH = "/api/approval/enroll-credential";
+const MIGRATION_REQUEST_PATH = "/api/approval/migration-request";
 const BACKEND_RESPONSE_HEADER = "X-Approval-Backend-Response";
 const EMPTY_BODY = new Uint8Array();
+
+// #6: validate a backend response body against its versioned schema, failing
+// closed (the caller's surrounding try/catch surfaces it as a backend error).
+function validateResponseBody(name, body) {
+  return assertMatchesSchema(body, responseSchema(name));
+}
 
 function apiOrigin(backendOrigin) {
   if (!backendOrigin) {
@@ -73,6 +84,8 @@ function assertBackendResponseAttestation(attestation, expected) {
   if (attestation.version !== "backend_response_envelope_v1") {
     throw new Error("approval backend response signature version is unsupported");
   }
+  // #6: the signed response-envelope header has a versioned schema too.
+  validateResponseBody("backend_response_envelope_v1", attestation);
   for (const [name, value] of Object.entries(expected)) {
     if (attestation[name] !== value) {
       throw new Error(`approval backend response signature ${name} mismatch`);
@@ -185,10 +198,149 @@ async function fetchBackendAuthNonce({ method, path, phoneSharePackage, backendO
     path: BACKEND_AUTH_NONCE_PATH,
     phoneSharePackage
   });
-  if (typeof body.server_nonce !== "string") {
-    throw new Error("approval backend did not return a server nonce");
-  }
+  validateResponseBody("backend_auth_nonce_response_v1", body);
   return body.server_nonce;
+}
+
+export async function fetchWebauthnChallengeNonce(phoneSharePackage, backendOrigin) {
+  const auth = await signedApprovalHeaders({
+    method: "GET",
+    path: WEBAUTHN_CHALLENGE_NONCE_PATH,
+    phoneSharePackage,
+    backendOrigin
+  });
+  const response = await fetch(apiUrl(WEBAUTHN_CHALLENGE_NONCE_PATH, {}, backendOrigin), {
+    method: "GET",
+    headers: auth.headers,
+    cache: "no-store"
+  });
+  const body = await verifiedJsonResponse(response, {
+    method: "GET",
+    path: WEBAUTHN_CHALLENGE_NONCE_PATH,
+    phoneSharePackage,
+    requestServerNonce: auth.serverNonce,
+    requestClientNonce: auth.clientNonce
+  });
+  validateResponseBody("webauthn_challenge_nonce_response_v1", body);
+  return { challengeNonce: body.challenge_nonce, challengeNonceExpiresAt: body.expires_at };
+}
+
+export async function enrollApprovalCredential(enrollment, phoneSharePackage, backendOrigin) {
+  const body = JSON.stringify(enrollment);
+  const bodyBytes = utf8Encode(body);
+  const auth = await signedApprovalHeaders({
+    method: "POST",
+    path: ENROLL_CREDENTIAL_PATH,
+    bodyBytes,
+    phoneSharePackage,
+    backendOrigin
+  });
+  const response = await fetch(apiUrl(ENROLL_CREDENTIAL_PATH, {}, backendOrigin), {
+    method: "POST",
+    headers: {
+      ...auth.headers,
+      "Content-Type": "application/json"
+    },
+    body
+  });
+  const result = await verifiedJsonResponse(response, {
+    method: "POST",
+    path: ENROLL_CREDENTIAL_PATH,
+    phoneSharePackage,
+    requestServerNonce: auth.serverNonce,
+    requestClientNonce: auth.clientNonce
+  });
+  return validateResponseBody("enroll_credential_result_v1", result);
+}
+
+// New-phone migration (server-approved): the new phone proves share-possession
+// (the signed backend-auth header) and asks the backend to register its freshly
+// minted passkey. The backend stores it as PENDING and returns a step-up
+// challenge nonce; it does NOT register anything until (a) the OLD passkey
+// attests and (b) an operator approves. All three calls reuse the same signed
+// auth + signed-response verification as the rest of the API.
+export async function requestMigration(request, phoneSharePackage, backendOrigin) {
+  const body = JSON.stringify(request);
+  const bodyBytes = utf8Encode(body);
+  const auth = await signedApprovalHeaders({
+    method: "POST",
+    path: MIGRATION_REQUEST_PATH,
+    bodyBytes,
+    phoneSharePackage,
+    backendOrigin
+  });
+  const response = await fetch(apiUrl(MIGRATION_REQUEST_PATH, {}, backendOrigin), {
+    method: "POST",
+    headers: {
+      ...auth.headers,
+      "Content-Type": "application/json"
+    },
+    body
+  });
+  const result = await verifiedJsonResponse(response, {
+    method: "POST",
+    path: MIGRATION_REQUEST_PATH,
+    phoneSharePackage,
+    requestServerNonce: auth.serverNonce,
+    requestClientNonce: auth.clientNonce
+  });
+  return validateResponseBody("migration_request_response_v1", result);
+}
+
+// OLD phone: submit the step-up assertion (signed by the existing passkey) for a
+// pending migration. The path carries the migration id, so the signed-response
+// attestation binds to that exact path.
+export async function attestMigration(migrationId, request, phoneSharePackage, backendOrigin) {
+  const path = `${MIGRATION_REQUEST_PATH}/${migrationId}/attest`;
+  const body = JSON.stringify(request);
+  const bodyBytes = utf8Encode(body);
+  const auth = await signedApprovalHeaders({
+    method: "POST",
+    path,
+    bodyBytes,
+    phoneSharePackage,
+    backendOrigin
+  });
+  const response = await fetch(apiUrl(path, {}, backendOrigin), {
+    method: "POST",
+    headers: {
+      ...auth.headers,
+      "Content-Type": "application/json"
+    },
+    body
+  });
+  const result = await verifiedJsonResponse(response, {
+    method: "POST",
+    path,
+    phoneSharePackage,
+    requestServerNonce: auth.serverNonce,
+    requestClientNonce: auth.clientNonce
+  });
+  return validateResponseBody("migration_attest_response_v1", result);
+}
+
+// NEW phone: poll a pending migration's status until an operator approves/rejects.
+export async function pollMigration(migrationId, phoneSharePackage, backendOrigin) {
+  const path = `${MIGRATION_REQUEST_PATH}/${migrationId}`;
+  const auth = await signedApprovalHeaders({
+    method: "GET",
+    path,
+    phoneSharePackage,
+    backendOrigin
+  });
+  const response = await fetch(apiUrl(path, {}, backendOrigin), {
+    method: "GET",
+    headers: auth.headers,
+    cache: "no-store"
+  });
+  const result = await verifiedJsonResponse(response, {
+    method: "GET",
+    path,
+    phoneSharePackage,
+    requestServerNonce: auth.serverNonce,
+    requestClientNonce: auth.clientNonce
+  });
+  return validateResponseBody("migration_status_response_v1", result);
 }
 
 async function signedApprovalHeaders({ method, path, bodyBytes = EMPTY_BODY, phoneSharePackage, backendOrigin }) {
@@ -264,13 +416,15 @@ export async function fetchPendingBundles(phoneSharePackage, backendOrigin) {
     headers: auth.headers,
     cache: "no-store"
   });
-  return normalizePendingBundles(await verifiedJsonResponse(response, {
+  const body = await verifiedJsonResponse(response, {
     method: "GET",
     path: PENDING_BUNDLES_PATH,
     phoneSharePackage,
     requestServerNonce: auth.serverNonce,
     requestClientNonce: auth.clientNonce
-  }));
+  });
+  validateResponseBody("pending_bundles_response_v1", body);
+  return normalizePendingBundles(body);
 }
 
 function normalizeRecentApprovals(body) {
@@ -295,13 +449,15 @@ export async function fetchRecentApprovals(phoneSharePackage, backendOrigin) {
     headers: auth.headers,
     cache: "no-store"
   });
-  return normalizeRecentApprovals(await verifiedJsonResponse(response, {
+  const body = await verifiedJsonResponse(response, {
     method: "GET",
     path: RECENT_APPROVALS_PATH,
     phoneSharePackage,
     requestServerNonce: auth.serverNonce,
     requestClientNonce: auth.clientNonce
-  }));
+  });
+  validateResponseBody("recent_approvals_response_v1", body);
+  return normalizeRecentApprovals(body);
 }
 
 export async function submitBundleApproval(approval, phoneSharePackage, backendOrigin, { signal } = {}) {
@@ -323,11 +479,12 @@ export async function submitBundleApproval(approval, phoneSharePackage, backendO
     body,
     signal
   });
-  return verifiedJsonResponse(response, {
+  const result = await verifiedJsonResponse(response, {
     method: "POST",
     path: BUNDLE_APPROVAL_PATH,
     phoneSharePackage,
     requestServerNonce: auth.serverNonce,
     requestClientNonce: auth.clientNonce
   });
+  return validateResponseBody("bundle_approval_result_v1", result);
 }

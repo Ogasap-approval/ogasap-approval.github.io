@@ -41,6 +41,23 @@ export function unmarshalSignShare(bytes) {
   if (bytes.length < 8 + xiLength) {
     throw new RangeError("SignShare bytes are truncated");
   }
+  // A CIRCL SignShare is exactly the 8-byte header plus xi, with no further
+  // fields, so any extra bytes are malformed input (a re-encoding/aliasing
+  // vector) and are rejected rather than silently ignored.
+  if (bytes.length !== 8 + xiLength) {
+    throw new RangeError("SignShare bytes have unexpected trailing data");
+  }
+  // Range-check the metadata so a direct consumer of the wire decoder cannot be
+  // handed a nonsensical (players, threshold, index) triple.
+  if (players < 1) {
+    throw new RangeError("SignShare players must be at least 1");
+  }
+  if (threshold < 1 || threshold > players) {
+    throw new RangeError("SignShare threshold must be in range 1..players");
+  }
+  if (index < 1 || index > players) {
+    throw new RangeError("SignShare index must be in range 1..players");
+  }
 
   return {
     players,

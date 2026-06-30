@@ -1,24 +1,12 @@
-import { submitBundleApproval } from "./api-client.js";
-import { assertResourcesIntegrity } from "./integrity.js";
+import { fetchWebauthnChallengeNonce, submitBundleApproval } from "./api-client.js";
+import { APP_INTEGRITY_GRAPH, assertResourcesIntegrity } from "./integrity.js";
 import { signBundleBankInputs } from "./bank-signing-batch.js";
 import { validateBundleForApprovalV1, webauthnApprovalChallengeV1 } from "./core/protocol/envelopes.js";
 import { requestApprovalAssertion } from "./webauthn.js";
 
-const SIGN_WORKER_GRAPH = [
-  "src/sign-task-worker.js",
-  "src/bank-signing-batch.js",
-  "src/signing-worker-pool.js",
-  "src/signing-session.js",
-  "src/polling-capabilities.js",
-  "src/core/crypto/bigint.js",
-  "src/core/crypto/bytes.js",
-  "src/core/crypto/circl-signshare.js",
-  "src/core/crypto/pkcs1v15.js",
-  "src/core/crypto/threshold-rsa.js",
-  "src/core/protocol/canonical.js",
-  "src/core/protocol/envelopes.js",
-  "src/core/protocol/signing.js"
-];
+// Issue #10: verify the full app-controlled graph (renderer/controller/HTML +
+// crypto), not just the signing sub-graph, before producing any signature.
+const SIGN_WORKER_GRAPH = APP_INTEGRITY_GRAPH;
 
 function approvalMetadata({ bundle, phoneSharePackage, webauthnCredential }) {
   return {
@@ -68,9 +56,17 @@ export async function approveReviewedBundle({
   const metadata = approvalMetadata({ bundle, phoneSharePackage, webauthnCredential });
   onStatus("Waiting for biometric approval");
   onProgress({ stage: "webauthn", message: "Confirm WebAuthn", percent: 0 });
+  // #19: a fresh, server-issued, single-use, expiring challenge nonce is folded
+  // into the challenge so the assertion cannot be replayed (even for this bundle).
+  const { challengeNonce, challengeNonceExpiresAt } = await fetchWebauthnChallengeNonce(phoneSharePackage, backendOrigin);
+  assertActive();
   const assertion = await requestApprovalAssertion({
     credentialId: webauthnCredential.credential_id,
-    challengeBytes: await webauthnApprovalChallengeV1(metadata)
+    challengeBytes: await webauthnApprovalChallengeV1({
+      ...metadata,
+      challenge_nonce: challengeNonce,
+      challenge_nonce_expires_at: challengeNonceExpiresAt
+    })
   });
   assertActive();
 
@@ -93,7 +89,11 @@ export async function approveReviewedBundle({
     totals: bundle.totals,
     bank_request_hashes: bundle.bank_request_hashes,
     visible_line_item_hashes: bundle.visible_line_item_hashes,
-    webauthn_assertion: assertion,
+    webauthn_assertion: {
+      ...assertion,
+      challenge_nonce: challengeNonce,
+      challenge_nonce_expires_at: challengeNonceExpiresAt
+    },
     phone_sign_shares: paymentSignatures.map((signature) => signature.sign_share_base64url),
     polling_capability_package: pollingCapabilityPackage,
     approved_at: approvedAt

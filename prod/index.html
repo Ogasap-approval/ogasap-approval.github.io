@@ -8,7 +8,7 @@
     <title>Approval</title>
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" href="./src/assets/icon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="./src/styles.css?v=date-refresh-v67">
+    <link rel="stylesheet" href="./src/styles.css" integrity="sha256-7KSidVZpO5cFl96QuEhE9bYhLP+8qQ8uiZrk1GyHFqA=" crossorigin="anonymous">
   </head>
   <body>
     <header class="app-header">
@@ -75,6 +75,9 @@
           <button id="unlockShareButton" type="button" class="secondary hidden">Unlock Share</button>
           <button id="scanEnrollmentButton" type="button" class="secondary">Scan QR</button>
           <button id="finishQrEnrollmentButton" type="button" class="secondary hidden">Enroll QR</button>
+          <button id="createBackupButton" type="button" class="secondary hidden">Create Backup</button>
+          <button id="startMigrationButton" type="button" class="secondary hidden">Request Migration</button>
+          <button id="confirmDeviceButton" type="button" class="secondary hidden">Confirm New Device</button>
           <label class="file-button">
             <span>Enroll Package</span>
             <input id="enrollmentFile" type="file" accept="application/json,.json">
@@ -172,6 +175,26 @@
       </div>
     </div>
 
-    <script type="module" src="./src/app.js?v=date-refresh-v67"></script>
+    <div id="qrModal" class="status-modal hidden" role="dialog" aria-modal="true" aria-labelledby="qrModalTitle">
+      <div class="status-modal-panel qr-modal-panel">
+        <div class="status-modal-header">
+          <h2 id="qrModalTitle">QR</h2>
+          <button id="qrModalClose" type="button" class="secondary compact-button">Close</button>
+        </div>
+        <p id="qrModalText" class="status-modal-text">-</p>
+        <div id="qrModalSecret" class="qr-secret hidden">
+          <p class="status-line">Save this recovery code — it is required to restore the backup and is not stored anywhere.</p>
+          <code id="qrModalSecretValue" class="qr-secret-code">-</code>
+          <button id="qrModalSecretCopy" type="button" class="secondary compact-button">Copy code</button>
+        </div>
+        <div class="qr-display">
+          <canvas id="qrCanvas" class="qr-canvas" width="320" height="320" aria-label="QR code"></canvas>
+        </div>
+        <p id="qrModalFrame" class="status-line qr-frame-counter hidden">-</p>
+      </div>
+    </div>
+
+    <script type="module" src="./src/frame-buster.js" integrity="sha256-NGGj/MXF4iHcdjp4OpfS5DpLKE1iVHkIc5CEwIumT0k=" crossorigin="anonymous"></script>
+    <script type="module" src="./src/bootstrap.js" integrity="sha256-lzoISeECadknwDB1+hrYd5twkvRrr1Ssbqac1/hMjyg=" crossorigin="anonymous"></script>
   </body>
 </html>

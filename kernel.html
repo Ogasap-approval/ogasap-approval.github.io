@@ -5,7 +5,7 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' https:; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Approval Kernel</title>
-    <link rel="stylesheet" href="./src/styles.css">
+    <link rel="stylesheet" href="./src/styles.css" integrity="sha256-7KSidVZpO5cFl96QuEhE9bYhLP+8qQ8uiZrk1GyHFqA=" crossorigin="anonymous">
   </head>
   <body class="kernel-body">
     <main>
@@ -53,6 +53,7 @@
       </section>
     </main>
 
-    <script type="module" src="./src/kernel-frame.js"></script>
+    <script type="module" src="./src/frame-buster.js" integrity="sha256-NGGj/MXF4iHcdjp4OpfS5DpLKE1iVHkIc5CEwIumT0k=" crossorigin="anonymous"></script>
+    <script type="module" src="./src/bootstrap.js" integrity="sha256-lzoISeECadknwDB1+hrYd5twkvRrr1Ssbqac1/hMjyg=" crossorigin="anonymous"></script>
   </body>
 </html>

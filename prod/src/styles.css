@@ -1057,3 +1057,47 @@ tr:last-child td {
     width: 28%;
   }
 }
+
+/* Backup / migration QR display modal (reuses .status-modal + .status-modal-panel). */
+.qr-modal-panel {
+  justify-items: center;
+}
+
+.qr-display {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  padding: 10px;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.qr-canvas {
+  width: min(320px, 78vw);
+  height: auto;
+  image-rendering: pixelated;
+}
+
+.qr-frame-counter {
+  width: 100%;
+  text-align: center;
+}
+
+.qr-secret {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.qr-secret-code {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f7fbf7;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.05rem;
+  letter-spacing: 0.04em;
+  word-break: break-all;
+  user-select: all;
+}

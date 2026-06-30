@@ -86,10 +86,19 @@ export async function createApprovalCredential({ approverId, deviceId }) {
   const extensionResults = credential.getClientExtensionResults?.() ?? {};
   const prfResult = extensionResults.prf?.results?.first;
   const credProps = extensionResults.credProps ?? {};
+  // Enrollment (#4/#35 PWA side): export the credential PUBLIC KEY (SPKI DER) and
+  // its COSE algorithm so the PWA can enrol it with the backend registry, which
+  // server-side WebAuthn verification needs to validate the assertion signature.
+  const attestation = credential.response;
+  const publicKeyDer = attestation?.getPublicKey?.() ?? null;
+  const publicKeyAlg = attestation?.getPublicKeyAlgorithm?.();
   return {
     credential_id: bytesToBase64url(new Uint8Array(credential.rawId)),
     type: credential.type,
     created_at: new Date().toISOString(),
+    rp_id: approvalRpId(),
+    public_key_spki_base64url: publicKeyDer ? bytesToBase64url(new Uint8Array(publicKeyDer)) : "",
+    public_key_alg: Number.isInteger(publicKeyAlg) ? publicKeyAlg : null,
     resident_key: credProps.rk === true,
     webauthn_capabilities: await webauthnClientCapabilities(),
     prf_creation_enabled: extensionResults.prf?.enabled === true,

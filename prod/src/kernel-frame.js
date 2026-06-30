@@ -1,7 +1,13 @@
 import { approveReviewedBundle } from "./approval-kernel.js";
+import { isTrustedFrameMessage } from "./frame-messaging.js";
 import { loadIntegrityManifest } from "./integrity.js";
 import { amountMinorToDecimal, deriveVisiblePaymentFromInput } from "./payment-view.js";
 import { validateBundleForApprovalV1 } from "./core/protocol/envelopes.js";
+
+// The approval shell embeds this kernel from the same origin, so outbound
+// messages are posted to that exact origin (never "*") and inbound messages are
+// only accepted from the parent window at that origin (issue #25).
+const PARENT_ORIGIN = window.location.origin;
 
 const ids = [
   "bundleSummary",
@@ -30,7 +36,7 @@ const state = {
 };
 
 function post(type, fields = {}) {
-  window.parent.postMessage({ source: "approval-kernel", type, ...fields }, "*");
+  window.parent.postMessage({ source: "approval-kernel", type, ...fields }, PARENT_ORIGIN);
 }
 
 function reportHeight() {
@@ -384,7 +390,7 @@ async function approveBundle() {
 }
 
 window.addEventListener("message", (event) => {
-  if (event.source !== window.parent || event.data?.source !== "approval-shell") {
+  if (!isTrustedFrameMessage(event, { source: window.parent, origin: PARENT_ORIGIN, kind: "approval-shell" })) {
     return;
   }
   if (event.data.type === "state") {

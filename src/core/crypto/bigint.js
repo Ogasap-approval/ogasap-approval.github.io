@@ -66,6 +66,20 @@ export function mod(value, modulus) {
   return result >= 0n ? result : result + modulus;
 }
 
+function exponentWindowBits(exponent) {
+  const bits = bitLength(exponent);
+  if (bits <= 64) {
+    return 1;
+  }
+  if (bits <= 256) {
+    return 4;
+  }
+  if (bits <= 1024) {
+    return 5;
+  }
+  return 6;
+}
+
 export function modPow(base, exponent, modulus) {
   if (typeof base !== "bigint" || typeof exponent !== "bigint" || typeof modulus !== "bigint") {
     throw new TypeError("base, exponent, and modulus must be bigint values");
@@ -77,15 +91,38 @@ export function modPow(base, exponent, modulus) {
     throw new RangeError("modulus must be positive");
   }
 
+  // Identical results to naive square-and-multiply (preserved for signing,
+  // verification, and CIRCL conformance) but using fixed-window (k-ary)
+  // exponentiation to cut the number of multiplications on large exponents.
+  if (exponent === 0n) {
+    return 1n;
+  }
+  if (modulus === 1n) {
+    return 0n;
+  }
+
+  const reducedBase = mod(base, modulus);
+  const windowBits = exponentWindowBits(exponent);
+  const tableSize = 1 << windowBits;
+  const powers = new Array(tableSize);
+  powers[0] = 1n;
+  for (let i = 1; i < tableSize; i += 1) {
+    powers[i] = mod(powers[i - 1] * reducedBase, modulus);
+  }
+
+  const bits = exponent.toString(2);
+  const padding = (windowBits - (bits.length % windowBits)) % windowBits;
+  const padded = padding === 0 ? bits : `${"0".repeat(padding)}${bits}`;
+
   let result = 1n;
-  let b = mod(base, modulus);
-  let e = exponent;
-  while (e > 0n) {
-    if ((e & 1n) === 1n) {
-      result = mod(result * b, modulus);
+  for (let offset = 0; offset < padded.length; offset += windowBits) {
+    for (let square = 0; square < windowBits; square += 1) {
+      result = mod(result * result, modulus);
     }
-    e >>= 1n;
-    b = mod(b * b, modulus);
+    const window = Number.parseInt(padded.slice(offset, offset + windowBits), 2);
+    if (window !== 0) {
+      result = mod(result * powers[window], modulus);
+    }
   }
   return result;
 }

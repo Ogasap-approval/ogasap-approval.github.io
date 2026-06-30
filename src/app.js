@@ -1,6 +1,23 @@
-import { fetchPendingBundles, fetchRecentApprovals } from "./api-client.js";
+import {
+  attestMigration,
+  enrollApprovalCredential,
+  fetchPendingBundles,
+  fetchRecentApprovals,
+  pollMigration,
+  requestMigration
+} from "./api-client.js";
+import { decodeEncryptedBackupQrV1, encryptBackupQrV1, validateEncryptedBackupQrV1 } from "./backup-recovery.js";
+import { utf8Decode, utf8Encode } from "./core/crypto/bytes.js";
+import { webauthnEnrollmentStepUpChallengeV1 } from "./core/protocol/envelopes.js";
 import { decodePhoneSharePackageV1 } from "./core/protocol/signing.js";
-import { loadIntegrityManifest } from "./integrity.js";
+import {
+  createMultipartReassembler,
+  encodeQrMatrix,
+  frameMultipartPayload,
+  MULTIPART_PREFIX,
+  renderQrToCanvas
+} from "./qr-encode.js";
+import { assertAppIntegrity, loadIntegrityManifest } from "./integrity.js";
 import { amountMinorToDecimal } from "./payment-view.js";
 import {
   backendOriginRequiresPrfUnlock,
@@ -14,7 +31,8 @@ import {
   requestPersistentStorage,
   saveBackendOrigin,
   savePhoneSharePackage,
-  saveWebAuthnCredential
+  saveWebAuthnCredential,
+  setLocalShareUnlockVerifier
 } from "./storage.js";
 import {
   createApprovalCredential,
@@ -23,11 +41,14 @@ import {
   randomPrfSaltBase64url,
   requestApprovalAssertion,
   requestPrfWrapKey
-} from "./webauthn.js?v=date-refresh-v67";
+} from "./webauthn.js";
 
 const POLL_INTERVAL_MS = 3000;
 const RESET_CONFIRM_MS = 10000;
 const QR_SCAN_INTERVAL_MS = 250;
+const QR_ANIM_INTERVAL_MS = 500;
+const MIGRATION_POLL_INTERVAL_MS = 3000;
+const RECOVERY_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const ids = [
   "runtimeStatus",
   "homeButton",
@@ -63,10 +84,22 @@ const ids = [
   "enablePrfButton",
   "scanEnrollmentButton",
   "finishQrEnrollmentButton",
+  "createBackupButton",
+  "startMigrationButton",
+  "confirmDeviceButton",
   "enrollmentFile",
   "qrScanner",
   "qrVideo",
   "cancelQrScanButton",
+  "qrModal",
+  "qrModalTitle",
+  "qrModalClose",
+  "qrModalText",
+  "qrModalSecret",
+  "qrModalSecretValue",
+  "qrModalSecretCopy",
+  "qrCanvas",
+  "qrModalFrame",
   "resetButton",
   "recentCount",
   "recentApprovals",
@@ -102,7 +135,16 @@ const state = {
   resetTimer: 0,
   qrStream: null,
   qrScanTimer: 0,
+  qrScanMode: "enroll",
+  backupReassembler: null,
   pendingQrPackage: null,
+  qrFrames: [],
+  qrFrameIndex: 0,
+  qrAnimTimer: 0,
+  migrationRequired: false,
+  pendingMigrationId: "",
+  migrationPollActive: false,
+  migrationPollTimer: 0,
   kernelReady: false,
   pollTimer: 0,
   pollInFlight: false,
@@ -413,6 +455,29 @@ async function authorizeEnrollmentReset() {
     challengeBytes
   }).catch((error) => {
     throw new Error(`Reset approval failed: ${error.message}`);
+  });
+}
+
+async function localShareUnlockChallengeBytes() {
+  const context = [
+    "APPROVAL_LOCAL_SHARE_UNLOCK_V1",
+    `page_origin:${window.location.origin}`,
+    `credential_id:${state.webauthnCredential?.credential_id ?? "-"}`
+  ].join("\n");
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${context}\n`)));
+}
+
+// Issue #26: user-verification gate the storage layer runs before unwrapping a
+// local-AES (non-PRF) phone share. Returns without a ceremony when no credential
+// is registered yet (nothing to verify against).
+async function verifyLocalShareUnlock() {
+  if (!state.webauthnCredential?.credential_id) {
+    return;
+  }
+  setStatus("Confirm with WebAuthn to unlock the local share");
+  await requestApprovalAssertion({
+    credentialId: state.webauthnCredential.credential_id,
+    challengeBytes: await localShareUnlockChallengeBytes()
   });
 }
 
@@ -868,6 +933,9 @@ function renderEnrollment() {
   els.saveBackendButton.disabled = backendOriginLocked;
   els.unlockShareButton.classList.toggle("hidden", !locked);
   els.enablePrfButton.classList.toggle("hidden", !canEnablePrfStorage());
+  els.createBackupButton.classList.toggle("hidden", !enrolled);
+  els.startMigrationButton.classList.toggle("hidden", !(enrolled && state.migrationRequired));
+  els.confirmDeviceButton.classList.toggle("hidden", !enrolled);
   renderUnlockGate();
   renderIntegrity();
   renderQrEnrollment();
@@ -898,10 +966,32 @@ function base64urlToText(value) {
 
 function validateEnrollmentPackage(pkg) {
   if (pkg?.version === "encrypted_backup_qr_v1") {
-    throw new Error("Encrypted backup QR must be decrypted before enrollment");
+    // Recovery path (issue #40): accept the encrypted backup shape here; the
+    // passphrase decrypt + share import happens in enrollFromParsedPackage.
+    validateEncryptedBackupQrV1(pkg);
+    return pkg;
   }
   decodePhoneSharePackageV1(pkg);
   return pkg;
+}
+
+async function recoverShareFromBackupQr(payload) {
+  const passphrase = window.prompt("Enter the backup passphrase to decrypt this share:");
+  if (!passphrase) {
+    throw new Error("Backup recovery cancelled");
+  }
+  setStatus("Decrypting encrypted backup (Argon2id, this can take a few seconds)");
+  return decodeEncryptedBackupQrV1(payload, passphrase);
+}
+
+async function enrollFromParsedPackage(parsed) {
+  if (parsed?.version === "encrypted_backup_qr_v1") {
+    const share = await recoverShareFromBackupQr(parsed);
+    await enrollFromPackage(share);
+    setStatus("Recovered share from encrypted backup; device enrolled");
+    return;
+  }
+  await enrollFromPackage(parsed);
 }
 
 function parseEnrollmentPackageText(text) {
@@ -930,6 +1020,36 @@ function parseEnrollmentPackageText(text) {
     }
   }
   throw lastError;
+}
+
+// Enrollment (#4/#35 PWA side): register the WebAuthn credential PUBLIC KEY with
+// the backend registry so server-side assertion verification (and the
+// fail-closed bundle-approval path) can validate this device's assertions. The
+// backend binds the approver/device/share/key from the threshold backend-auth
+// signature; we only supply the credential public key, its algorithm, RP ID and
+// allowed origin. Best-effort: needs a configured backend origin and an exported
+// public key (older records / public-only locked records may lack it).
+async function enrollCredentialWithBackend(credential = state.webauthnCredential) {
+  const pkg = state.phoneSharePackage;
+  if (!state.backendOrigin || !pkg || !credential?.credential_id) {
+    return false;
+  }
+  if (!credential.public_key_spki_base64url || !Number.isInteger(credential.public_key_alg) || !credential.rp_id) {
+    return false;
+  }
+  await enrollApprovalCredential({
+    version: "enroll_credential_v1",
+    approver_id: pkg.approver_id,
+    device_id: pkg.device_id,
+    share_index: pkg.share_index,
+    key_id: pkg.key_id,
+    credential_id: credential.credential_id,
+    public_key_spki_base64url: credential.public_key_spki_base64url,
+    alg: credential.public_key_alg,
+    rp_id: credential.rp_id,
+    allowed_origins: [window.location.origin]
+  }, pkg, state.backendOrigin);
+  return true;
 }
 
 async function enrollFromPackage(pkg) {
@@ -965,6 +1085,20 @@ async function enrollFromPackage(pkg) {
   renderEnrollment();
   sendKernelState();
   setStatus(prfWrap ? "Device enrolled with WebAuthn PRF storage" : "Device enrolled. Tap Enable PRF in Settings to test PRF storage.", prfWrap ? "normal" : "warning");
+  if (state.backendOrigin) {
+    await enrollCredentialWithBackend(credential).catch((error) => {
+      if (error.code === "context_already_enrolled") {
+        // New-phone case: the approver context already has a passkey, so this
+        // device cannot self-enroll. It must go through operator-approved
+        // migration instead (Request Migration → confirm on old phone → approve).
+        state.migrationRequired = true;
+        renderEnrollment();
+        setStatus("This approver already has a device. Tap Request Migration to move approval to this phone.", "warning");
+        return;
+      }
+      setStatus(`Device enrolled locally; backend credential enrollment failed: ${error.message}`, "warning");
+    });
+  }
   pollPendingBundles();
 }
 
@@ -973,6 +1107,11 @@ function storableCredentialRecord(credential, prfWrap) {
     credential_id: credential.credential_id,
     type: credential.type,
     created_at: credential.created_at,
+    // Non-secret enrollment material so the credential can be (re-)enrolled with
+    // the backend registry whenever a backend origin is configured.
+    rp_id: typeof credential.rp_id === "string" ? credential.rp_id : "",
+    public_key_spki_base64url: typeof credential.public_key_spki_base64url === "string" ? credential.public_key_spki_base64url : "",
+    public_key_alg: Number.isInteger(credential.public_key_alg) ? credential.public_key_alg : null,
     resident_key: credential.resident_key === true,
     webauthn_capabilities: credential.webauthn_capabilities ?? {},
     prf_creation_enabled: credential.prf_creation_enabled === true,
@@ -1145,6 +1284,11 @@ async function saveBackendFromSettings() {
   state.backendOriginRequiresPrfUnlock = Boolean(storageOptions.prfWrapKey);
   renderEnrollment();
   setStatus("Backend saved");
+  if (state.phoneSharePackage && state.webauthnCredential) {
+    await enrollCredentialWithBackend().catch((error) => {
+      setStatus(`Backend saved; credential enrollment failed: ${error.message}`, "warning");
+    });
+  }
   pollPendingBundles();
 }
 
@@ -1152,7 +1296,7 @@ async function enrollFromPackageFile(file) {
   if (!file) {
     return;
   }
-  await enrollFromPackage(parseEnrollmentPackageText(await file.text()));
+  await enrollFromParsedPackage(parseEnrollmentPackageText(await file.text()));
   els.enrollmentFile.value = "";
 }
 
@@ -1181,6 +1325,8 @@ function stopQrScanner(message = "") {
     }
     state.qrStream = null;
   }
+  state.backupReassembler = null;
+  state.qrScanMode = "enroll";
   els.qrVideo.pause();
   els.qrVideo.srcObject = null;
   renderQrEnrollment();
@@ -1197,11 +1343,7 @@ async function scanQrFrame(detector) {
   try {
     const codes = await detector.detect(els.qrVideo);
     const rawValue = codes.find((code) => code.rawValue?.trim())?.rawValue;
-    if (rawValue) {
-      state.pendingQrPackage = parseEnrollmentPackageText(rawValue);
-      stopQrScanner();
-      renderQrEnrollment();
-      setStatus("QR scanned. Tap Enroll QR to finish with WebAuthn.");
+    if (rawValue && await handleScannedValue(rawValue.trim())) {
       return;
     }
   } catch (error) {
@@ -1215,26 +1357,356 @@ async function scanQrFrame(detector) {
   }, QR_SCAN_INTERVAL_MS);
 }
 
-async function startQrEnrollment() {
+// Routes a decoded QR value by scan mode. Returns true when scanning is complete
+// (camera stopped); false to keep scanning (e.g. waiting for more backup frames).
+async function handleScannedValue(rawValue) {
+  if (state.qrScanMode === "migration-confirm") {
+    const payload = parseMigrationStepUpPayload(rawValue);
+    if (!payload) {
+      return false;
+    }
+    stopQrScanner();
+    await confirmDeviceFromPayload(payload);
+    return true;
+  }
+
+  // enroll / recovery scan: a single enrollment package, or a multi-part backup.
+  if (rawValue.startsWith(MULTIPART_PREFIX)) {
+    const result = await state.backupReassembler.accept(rawValue);
+    if (result.status === "progress") {
+      setStatus(`Scanning backup… frame ${result.received}/${result.total}`);
+      return false;
+    }
+    if (result.status === "error") {
+      setStatus(`Backup QR error: ${result.error}. Keep aiming at the frames.`, "warning");
+      state.backupReassembler = createMultipartReassembler();
+      return false;
+    }
+    if (result.status === "complete") {
+      state.pendingQrPackage = validateEnrollmentPackage(JSON.parse(utf8Decode(result.bytes)));
+      stopQrScanner();
+      setStatus("Backup scanned. Tap Enroll QR to finish with WebAuthn.");
+      return true;
+    }
+    return false;
+  }
+
+  state.pendingQrPackage = parseEnrollmentPackageText(rawValue);
+  stopQrScanner();
+  setStatus("QR scanned. Tap Enroll QR to finish with WebAuthn.");
+  return true;
+}
+
+function parseMigrationStepUpPayload(rawValue) {
+  let parsed;
+  try {
+    parsed = JSON.parse(rawValue);
+  } catch {
+    return null;
+  }
+  if (parsed?.v !== "migration_step_up_v1") {
+    return null;
+  }
+  const required = [
+    "migration_id", "approver_id", "device_id", "share_index", "key_id",
+    "new_credential_id", "new_public_key_spki_base64url", "challenge_nonce", "challenge_nonce_expires_at"
+  ];
+  for (const field of required) {
+    if (parsed[field] === undefined || parsed[field] === null || parsed[field] === "") {
+      return null;
+    }
+  }
+  return parsed;
+}
+
+async function openScanner(mode) {
+  state.qrScanMode = mode;
   state.pendingQrPackage = null;
+  state.backupReassembler = createMultipartReassembler();
   renderQrEnrollment();
   const detector = await createQrDetector();
   state.qrStream = await navigator.mediaDevices.getUserMedia({
     audio: false,
     video: { facingMode: { ideal: "environment" } }
   });
-  els.qrVideo.srcObject = state.qrStream;
-  await els.qrVideo.play();
+  // Reveal the viewfinder BEFORE attaching the stream and calling play():
+  // mobile browsers stall or reject play() on a still-hidden (display:none)
+  // <video>, which previously left the camera live with no visible preview.
   renderQrEnrollment();
-  setStatus("Scanning enrollment QR");
+  els.qrVideo.srcObject = state.qrStream;
+  try {
+    await els.qrVideo.play();
+  } catch {
+    // autoplay + muted + playsinline restart playback on their own; a rejected
+    // play() (common right after the element is revealed) must not abort scanning.
+  }
+  setStatus(mode === "migration-confirm"
+    ? "Scan the new device's migration code"
+    : "Scanning enrollment QR");
   scanQrFrame(detector);
+}
+
+async function startQrEnrollment() {
+  await openScanner("enroll");
+}
+
+async function startConfirmDeviceScan() {
+  if (!state.phoneSharePackage || !state.webauthnCredential?.credential_id) {
+    throw new Error("Enroll this device before confirming another");
+  }
+  await openScanner("migration-confirm");
 }
 
 async function finishQrEnrollment() {
   if (!state.pendingQrPackage) {
     throw new Error("Scan enrollment QR first");
   }
-  await enrollFromPackage(state.pendingQrPackage);
+  await enrollFromParsedPackage(state.pendingQrPackage);
+}
+
+// A high-entropy (160-bit) recovery code in Crockford base32 (no I/L/O/U) — the
+// secret that protects the encrypted backup QR. A backup QR is photographable,
+// so a weak user passphrase would be brute-forceable offline despite Argon2id;
+// a generated code removes that risk. Shown once for the user to store.
+function generateRecoveryCode() {
+  const bytes = crypto.getRandomValues(new Uint8Array(20));
+  let bits = 0;
+  let value = 0;
+  let out = "";
+  for (const byte of bytes) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      out += RECOVERY_CODE_ALPHABET[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  return out;
+}
+
+function showQrModal({ title, text, secret = "" }) {
+  els.qrModalTitle.textContent = title;
+  els.qrModalText.textContent = text;
+  if (secret) {
+    els.qrModalSecretValue.textContent = secret;
+    els.qrModalSecret.classList.remove("hidden");
+  } else {
+    els.qrModalSecretValue.textContent = "-";
+    els.qrModalSecret.classList.add("hidden");
+  }
+  els.qrModal.classList.remove("hidden");
+}
+
+function hideQrModal() {
+  stopQrAnimation();
+  els.qrModal.classList.add("hidden");
+}
+
+function stopQrAnimation() {
+  if (state.qrAnimTimer) {
+    clearInterval(state.qrAnimTimer);
+    state.qrAnimTimer = 0;
+  }
+  state.qrFrames = [];
+  state.qrFrameIndex = 0;
+}
+
+// Renders one or more QR frames into the modal canvas. Multi-part backups cycle
+// (animate) so a phone-to-phone scan can collect every frame; a single frame
+// (the migration step-up) just renders once.
+function startQrAnimation(frames) {
+  stopQrAnimation();
+  state.qrFrames = frames;
+  state.qrFrameIndex = 0;
+  const draw = () => {
+    const frame = state.qrFrames[state.qrFrameIndex];
+    const matrix = encodeQrMatrix(utf8Encode(frame), { ecLevel: "M" });
+    renderQrToCanvas(matrix, els.qrCanvas, { moduleSize: 4 });
+    els.qrModalFrame.textContent = `Frame ${state.qrFrameIndex + 1} / ${state.qrFrames.length}`;
+    els.qrModalFrame.classList.toggle("hidden", state.qrFrames.length <= 1);
+    state.qrFrameIndex = (state.qrFrameIndex + 1) % state.qrFrames.length;
+  };
+  draw();
+  if (frames.length > 1) {
+    state.qrAnimTimer = setInterval(draw, QR_ANIM_INTERVAL_MS);
+  }
+}
+
+async function copyRecoveryCode() {
+  const code = els.qrModalSecretValue.textContent ?? "";
+  try {
+    await navigator.clipboard.writeText(code);
+    setStatus("Recovery code copied");
+  } catch {
+    setStatus("Copy failed — select and copy the code manually", "warning");
+  }
+}
+
+// Feature A: create an encrypted backup of this device's phone share and render
+// it as a multi-part (animated) QR for a second device to scan. The share must
+// be unlocked in memory first (PRF/UV ceremony) before it can be re-encrypted.
+async function createAndExportBackup() {
+  if (needsShareUnlock()) {
+    await unlockPrfShare();
+  }
+  if (!state.phoneSharePackage) {
+    throw new Error("Unlock your share before creating a backup");
+  }
+  const recoveryCode = generateRecoveryCode();
+  setStatus("Encrypting backup (Argon2id, this can take a few seconds)…");
+  const payload = await encryptBackupQrV1({
+    share: state.phoneSharePackage,
+    passphrase: recoveryCode,
+    createdAt: new Date().toISOString()
+  });
+  const frames = await frameMultipartPayload(utf8Encode(JSON.stringify(payload)));
+  showQrModal({
+    title: "Encrypted backup",
+    text: `On the other device tap "Scan QR" and hold it over this screen until all ${frames.length} frames are captured. Store the recovery code below — it is required to restore and is shown only once.`,
+    secret: recoveryCode
+  });
+  startQrAnimation(frames);
+  setStatus("Backup ready — scan all frames on the other device");
+}
+
+// Feature B (new phone): ask the backend to register this device's freshly minted
+// passkey for the already-enrolled context. The backend stores it as PENDING and
+// returns a step-up nonce; this device shows a step-up QR for the OLD phone to
+// confirm, then polls until an operator approves.
+async function startMigration() {
+  const pkg = state.phoneSharePackage;
+  const credential = state.webauthnCredential;
+  if (!pkg || !credential?.credential_id) {
+    throw new Error("Enroll this device before requesting migration");
+  }
+  if (!credential.public_key_spki_base64url || !Number.isInteger(credential.public_key_alg) || !credential.rp_id) {
+    throw new Error("This device's passkey is missing its public key; reset and re-enroll");
+  }
+  if (!state.backendOrigin) {
+    throw new Error("Configure the backend before requesting migration");
+  }
+  setStatus("Requesting device migration…");
+  const result = await requestMigration({
+    version: "migration_request_v1",
+    new_credential_id: credential.credential_id,
+    new_public_key_spki_base64url: credential.public_key_spki_base64url,
+    alg: credential.public_key_alg,
+    rp_id: credential.rp_id,
+    allowed_origins: [window.location.origin]
+  }, pkg, state.backendOrigin);
+  state.pendingMigrationId = result.migration_id;
+  const stepUpPayload = {
+    v: "migration_step_up_v1",
+    migration_id: result.migration_id,
+    approver_id: pkg.approver_id,
+    device_id: pkg.device_id,
+    share_index: pkg.share_index,
+    key_id: pkg.key_id,
+    new_credential_id: credential.credential_id,
+    new_public_key_spki_base64url: credential.public_key_spki_base64url,
+    challenge_nonce: result.challenge_nonce,
+    challenge_nonce_expires_at: result.challenge_nonce_expires_at
+  };
+  showQrModal({
+    title: "Confirm on your old device",
+    text: "On your OLD phone open Settings → Confirm New Device and scan this code. Then an operator must approve the migration on the backend."
+  });
+  startQrAnimation([JSON.stringify(stepUpPayload)]);
+  pollMigrationUntilResolved(result.migration_id);
+}
+
+function stopMigrationPoll() {
+  state.migrationPollActive = false;
+  if (state.migrationPollTimer) {
+    clearTimeout(state.migrationPollTimer);
+    state.migrationPollTimer = 0;
+  }
+}
+
+function pollMigrationUntilResolved(migrationId) {
+  stopMigrationPoll();
+  state.migrationPollActive = true;
+  const tick = async () => {
+    if (!state.migrationPollActive || state.pendingMigrationId !== migrationId) {
+      return;
+    }
+    try {
+      const status = await pollMigration(migrationId, state.phoneSharePackage, state.backendOrigin);
+      if (status.status === "approved") {
+        stopMigrationPoll();
+        state.migrationRequired = false;
+        state.pendingMigrationId = "";
+        hideQrModal();
+        setStatus("Migration approved — this device is now active.");
+        renderEnrollment();
+        pollPendingBundles({ queueIfBusy: true });
+        return;
+      }
+      if (status.status === "rejected" || status.status === "not_found") {
+        stopMigrationPoll();
+        setStatus(`Migration ${status.status}.`, "warning");
+        renderEnrollment();
+        return;
+      }
+      els.qrModalText.textContent = status.status === "awaiting_approval"
+        ? "Old device confirmed. Waiting for operator approval on the backend…"
+        : "Waiting for your old device to confirm…";
+    } catch {
+      // Transient (offline / nonce churn) — keep polling.
+    }
+    if (state.migrationPollActive && state.pendingMigrationId === migrationId) {
+      state.migrationPollTimer = setTimeout(tick, MIGRATION_POLL_INTERVAL_MS);
+    }
+  };
+  tick();
+}
+
+// Feature B (old phone): confirm a new device by signing the step-up challenge
+// with THIS device's existing passkey, proving the second factor. The backend
+// recomputes the same challenge from its stored record and verifies it.
+async function confirmDeviceFromPayload(payload) {
+  const pkg = state.phoneSharePackage;
+  const credential = state.webauthnCredential;
+  if (!pkg || !credential?.credential_id) {
+    throw new Error("This device is not enrolled");
+  }
+  if (!state.backendOrigin) {
+    throw new Error("Configure the backend before confirming a device");
+  }
+  // Validate the scanned request locally BEFORE prompting WebAuthn: a tampered or
+  // foreign QR would otherwise burn the single-use step-up nonce on a doomed
+  // assertion (leaving the real request stuck) and pop a confusing passkey prompt.
+  if (!/^mig-[A-Za-z0-9_-]+$/u.test(payload.migration_id)) {
+    throw new Error("Scanned code is not a valid migration request");
+  }
+  if (
+    payload.approver_id !== pkg.approver_id ||
+    payload.device_id !== pkg.device_id ||
+    payload.share_index !== pkg.share_index ||
+    payload.key_id !== pkg.key_id
+  ) {
+    throw new Error("Scanned code is for a different approver context");
+  }
+  setStatus("Confirming the new device with your passkey…");
+  const challengeBytes = await webauthnEnrollmentStepUpChallengeV1({
+    approver_id: payload.approver_id,
+    device_id: payload.device_id,
+    share_index: payload.share_index,
+    key_id: payload.key_id,
+    new_credential_id: payload.new_credential_id,
+    new_public_key_spki_base64url: payload.new_public_key_spki_base64url,
+    challenge_nonce: payload.challenge_nonce,
+    challenge_nonce_expires_at: payload.challenge_nonce_expires_at
+  });
+  const assertion = await requestApprovalAssertion({
+    credentialId: credential.credential_id,
+    challengeBytes
+  });
+  await attestMigration(payload.migration_id, {
+    version: "migration_attest_v1",
+    step_up_assertion: assertion
+  }, pkg, state.backendOrigin);
+  setStatus("New device confirmed. An operator must now approve the migration on the backend.");
 }
 
 async function resetEnrollment() {
@@ -1262,6 +1734,9 @@ async function resetEnrollment() {
   state.prfWrapKey = null;
   state.prfSaltBase64url = "";
   state.approvedBundleIds.clear();
+  stopMigrationPoll();
+  state.migrationRequired = false;
+  state.pendingMigrationId = "";
   stopQrScanner();
   renderEnrollment();
   renderRecentApprovals();
@@ -1401,6 +1876,20 @@ async function init() {
     setStatus(error.message, "error");
   }));
   els.cancelQrScanButton.addEventListener("click", () => stopQrScanner("QR scan cancelled"));
+  els.createBackupButton.addEventListener("click", () => createAndExportBackup().catch((error) => {
+    hideQrModal();
+    setStatus(error.message, "error");
+  }));
+  els.startMigrationButton.addEventListener("click", () => startMigration().catch((error) => {
+    hideQrModal();
+    setStatus(error.message, "error");
+  }));
+  els.confirmDeviceButton.addEventListener("click", () => startConfirmDeviceScan().catch((error) => {
+    stopQrScanner();
+    setStatus(error.message, "error");
+  }));
+  els.qrModalClose.addEventListener("click", () => hideQrModal());
+  els.qrModalSecretCopy.addEventListener("click", () => copyRecoveryCode());
   els.unlockShareButton.addEventListener("click", () => unlockPrfShare().catch((error) => {
     setStatus(error.message, "error");
   }));
@@ -1433,8 +1922,11 @@ async function init() {
   });
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./service-worker.js?v=date-refresh-v67").catch(() => {});
+    navigator.serviceWorker.register("./service-worker.js", { type: "module" }).catch(() => {});
   }
+
+  // Issue #26: gate every local-AES share unwrap behind a WebAuthn UV ceremony.
+  setLocalShareUnlockVerifier(verifyLocalShareUnlock);
 
   let persistent = await isStoragePersisted().catch(() => false);
   if (!persistent) {
@@ -1442,10 +1934,22 @@ async function init() {
   }
   state.storagePersistent = persistent;
 
-  state.integrityManifest = await loadIntegrityManifest().catch((error) => {
+  // Issue #10: verify the full app-controlled graph (HTML + renderer/controller
+  // + crypto), not only the signing sub-graph, before trusting the app. This
+  // FAILS CLOSED: on any integrity failure we abort init before loading key
+  // material, polling, or signing. (The SRI-pinned bootstrap.js is the primary
+  // verify-before-import gate; this is the same enforcement if app.js is ever
+  // reached without it.)
+  try {
+    state.integrityManifest = await loadIntegrityManifest();
+    await assertAppIntegrity(state.integrityManifest);
+  } catch (error) {
     state.integrityError = error;
-    return null;
-  });
+    state.integrityManifest = null;
+    renderEnrollment();
+    setStatus(`App integrity check failed: ${error.message}`, "error");
+    throw error; // fail closed: do not load key material, poll, or sign
+  }
   state.shareStorageRequiresPrfUnlock = await phoneSharePackageRequiresPrfUnlock().catch(() => false);
   state.webauthnCredential = await loadWebAuthnCredential({
     publicOnly: state.shareStorageRequiresPrfUnlock

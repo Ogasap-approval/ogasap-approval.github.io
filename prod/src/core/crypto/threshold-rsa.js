@@ -12,6 +12,13 @@ import {
 import { marshalSignShare } from "./circl-signshare.js";
 import { pkcs1v15PaddedMessageForModulus } from "./pkcs1v15.js";
 
+// Capability token that unlocks the unblinded (`blinded: false`) partial-
+// signature path. The raw unblinded path raises the secret share directly to a
+// variable-time exponentiation and so must never run in production; gating it
+// behind a Symbol means production callers cannot reach it even by accident,
+// while tests that need deterministic math import and pass this exact value.
+export const UNSAFE_ALLOW_UNBLINDED = Symbol("UNSAFE_ALLOW_UNBLINDED");
+
 export function thresholdRsaExponent(shareSi, players) {
   if (typeof shareSi !== "bigint") {
     throw new TypeError("shareSi must be a bigint");
@@ -109,6 +116,22 @@ function computeLambda(delta, shares, i, j) {
   return scaledNum / den;
 }
 
+// TRUST BOUNDARY (#36): `combineSignShares` self-verifies the reconstructed
+// signature against the CALLER-SUPPLIED `paddedDigest` (`modPow(y, e, N) === x`,
+// where `x = bytesToBigInt(paddedDigest)`). It therefore only proves the
+// combined signature is valid for *that* digest — it has no notion of which
+// message the digest represents. Binding the digest to the intended,
+// authenticated message is the CALLER's responsibility: every caller must
+// locally re-encode the canonical authenticated message into `paddedDigest` and
+// must never accept a digest received from the network. A wrong-but-in-range
+// digest will still combine successfully; combine cannot detect it.
+//
+// SEMI-HONEST / NON-ROBUST ASSUMPTION (#37): this is Shoup "Protocol 1"
+// combination WITHOUT robustness — there are NO per-share validity proofs. The
+// scheme assumes the share holders (the four mutually-known operators) are
+// honest-but-curious. A malicious or buggy share holder cannot forge a
+// signature, but it can submit a bad partial that makes combination abort with
+// no attribution of which player misbehaved (a denial-of-service, not a forgery).
 export function combineSignShares({ modulus, publicExponent, shares, paddedDigest }) {
   if (!Array.isArray(shares) || shares.length === 0) {
     throw new Error("at least one sign share is required");
@@ -166,6 +189,7 @@ export function partialSignatureXi({
   shareSi,
   players = 4,
   blinded = true,
+  allowUnblinded,
   cryptoProvider = globalThis.crypto
 }) {
   if (!(paddedDigest instanceof Uint8Array)) {
@@ -176,6 +200,9 @@ export function partialSignatureXi({
   }
   if (paddedDigest.length !== modulusByteLength(modulus)) {
     throw new RangeError("paddedDigest length must match RSA modulus length");
+  }
+  if (!blinded && allowUnblinded !== UNSAFE_ALLOW_UNBLINDED) {
+    throw new Error("unblinded partial signatures are disabled outside tests; pass UNSAFE_ALLOW_UNBLINDED to opt in");
   }
 
   const x = bytesToBigInt(paddedDigest);
@@ -202,6 +229,7 @@ export function signShareForPaddedDigest({
   players = 4,
   threshold = 3,
   blinded = true,
+  allowUnblinded,
   cryptoProvider = globalThis.crypto
 }) {
   const xi = partialSignatureXi({
@@ -210,6 +238,7 @@ export function signShareForPaddedDigest({
     shareSi,
     players,
     blinded,
+    allowUnblinded,
     cryptoProvider
   });
 
@@ -229,6 +258,7 @@ export async function signShareForMessagePkcs1v15({
   players = 4,
   threshold = 3,
   blinded = true,
+  allowUnblinded,
   cryptoProvider = globalThis.crypto
 }) {
   const paddedDigest = await pkcs1v15PaddedMessageForModulus(message, modulus, cryptoProvider);
@@ -240,6 +270,7 @@ export async function signShareForMessagePkcs1v15({
     players,
     threshold,
     blinded,
+    allowUnblinded,
     cryptoProvider
   });
 }

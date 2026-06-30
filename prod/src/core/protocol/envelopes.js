@@ -1,4 +1,4 @@
-import { base64urlToBytes, bytesToHex, utf8Decode, utf8Encode } from "../crypto/bytes.js";
+import { base64urlToBytes, bytesToHex, utf8Encode } from "../crypto/bytes.js";
 import { emsaPkcs1v15Encode, sha256 } from "../crypto/pkcs1v15.js";
 import { canonicalJsonBytes, canonicalText, sha256Hex, stableStringify } from "./canonical.js";
 
@@ -10,6 +10,11 @@ const DEVICE_ID = /^[A-Za-z0-9._:-]{16,128}$/u;
 const BASE64URL = /^[A-Za-z0-9_-]+$/u;
 const CURRENCY = /^[A-Z]{3}$/u;
 const AMOUNT_MINOR = /^[0-9]+$/u;
+const AMOUNT_DECIMAL = /^(0|[1-9][0-9]*)(\.[0-9]{1,2})?$/u;
+const BBAN_VALUE = /^[0-9]{14}$/u;
+const DISPLAY_UNSAFE = /[\p{Cc}\p{Cf}\p{Cs}\p{Noncharacter_Code_Point}]/u;
+const MAX_BANK_BODY_FIELD = 256;
+const MAX_AMOUNT_MINOR = 10n ** 15n;
 const PRINTABLE_ASCII = /^[\x20-\x7e]*$/u;
 const NO_LINE_BREAKS = /^[^\r\n]*$/u;
 const MAX_BUNDLE_PAYMENTS = 200;
@@ -31,8 +36,13 @@ function assertHex64(name, value) {
   assertPattern(name, value, HEX_64);
 }
 
+// RFC 3339 date-time: a date, a 'T' separator, a time, and a 'Z' or numeric
+// offset. This matches the JSON Schemas' "format": "date-time" and rejects
+// date-only strings (e.g. "2026-05-15") that Date.parse would otherwise accept.
+const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/u;
+
 function assertDateTime(name, value) {
-  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
+  if (typeof value !== "string" || !ISO_DATE_TIME.test(value) || Number.isNaN(Date.parse(value))) {
     throw new RangeError(`${name} must be an ISO date-time`);
   }
 }
@@ -80,8 +90,14 @@ function hexToBase64(hex) {
 }
 
 function decimalAmountToMinor(value) {
-  const text = String(value ?? "");
-  const match = /^([0-9]+)(?:\.([0-9]{1,2}))?$/u.exec(text);
+  // Amounts MUST arrive as their canonical decimal string. A JS number could
+  // already have lost precision in JSON.parse (any integer minor unit > 2^53
+  // rounds), so accepting one here would let the displayed/derived amount_minor
+  // silently diverge from the signed bytes. Parse the digits with BigInt only.
+  if (typeof value !== "string") {
+    throw new TypeError("amount must be a decimal string, not a JS number");
+  }
+  const match = /^([0-9]+)(?:\.([0-9]{1,2}))?$/u.exec(value);
   if (!match) {
     return "";
   }
@@ -113,16 +129,16 @@ export async function canonicalBackendAuthEnvelopeV1(input, cryptoProvider = glo
   }
 
   return canonicalText("APPROVAL_BACKEND_API_AUTH_V1", [
-    ["method", method],
-    ["path", input.path],
-    ["body_sha256", bodySha256],
-    ["approver_id", input.approver_id],
-    ["device_id", input.device_id],
-    ["share_index", input.share_index],
-    ["key_id", input.key_id],
-    ["timestamp", input.timestamp],
-    ["server_nonce", input.server_nonce],
-    ["client_nonce", input.client_nonce]
+    ["method", method, "string"],
+    ["path", input.path, "string"],
+    ["body_sha256", bodySha256, "string"],
+    ["approver_id", input.approver_id, "string"],
+    ["device_id", input.device_id, "string"],
+    ["share_index", input.share_index, "integer"],
+    ["key_id", input.key_id, "string"],
+    ["timestamp", input.timestamp, "string"],
+    ["server_nonce", input.server_nonce, "string"],
+    ["client_nonce", input.client_nonce, "string"]
   ]);
 }
 
@@ -152,32 +168,53 @@ export async function canonicalBackendResponseEnvelopeV1(input, cryptoProvider =
   assertDateTime("response_timestamp", input.response_timestamp);
 
   return canonicalText("APPROVAL_BACKEND_RESPONSE_V1", [
-    ["method", method],
-    ["path", input.path],
-    ["status", input.status],
-    ["body_sha256", bodySha256],
-    ["approver_id", input.approver_id],
-    ["device_id", input.device_id],
-    ["share_index", input.share_index],
-    ["key_id", input.key_id],
-    ["request_server_nonce", input.request_server_nonce ?? "-"],
-    ["request_client_nonce", input.request_client_nonce ?? "-"],
-    ["response_timestamp", input.response_timestamp]
+    ["method", method, "string"],
+    ["path", input.path, "string"],
+    ["status", input.status, "integer"],
+    ["body_sha256", bodySha256, "string"],
+    ["approver_id", input.approver_id, "string"],
+    ["device_id", input.device_id, "string"],
+    ["share_index", input.share_index, "integer"],
+    ["key_id", input.key_id, "string"],
+    ["request_server_nonce", input.request_server_nonce ?? "-", "string"],
+    ["request_client_nonce", input.request_client_nonce ?? "-", "string"],
+    ["response_timestamp", input.response_timestamp, "string"]
   ]);
 }
 
+// The eight scalar fields that are actually emitted into (and signed as) the
+// APPROVAL_BUNDLE_APPROVAL_V1 canonical text. Kept separate from the full
+// wire-object validator (validateBundleApprovalEnvelopeInputV1) so the canonical
+// signer does not require the authorization fields (totals, webauthn_assertion,
+// phone_sign_shares) it never serializes.
+function assertBundleApprovalCanonicalFieldsV1(input) {
+  assertPattern("bundle_id", input.bundle_id, ID_8_128);
+  assertHex64("bundle_hash_sha256", input.bundle_hash_sha256);
+  assertPaymentCount(input.payment_count);
+  assertPattern("approver_id", input.approver_id, APPROVER_ID);
+  assertPattern("device_id", input.device_id, DEVICE_ID);
+  if (![3, 4].includes(input.share_index)) {
+    throw new RangeError("share_index must be 3 or 4");
+  }
+  assertPattern("key_id", input.key_id, ID_8_128);
+  assertDateTime("approved_at", input.approved_at);
+}
+
 export function canonicalBundleApprovalEnvelopeV1(input) {
-  validateBundleApprovalEnvelopeInputV1(input);
+  if (input?.version !== undefined && input.version !== "bundle_approval_v1") {
+    throw new RangeError("bundle approval version must be bundle_approval_v1");
+  }
+  assertBundleApprovalCanonicalFieldsV1(input);
 
   return canonicalText("APPROVAL_BUNDLE_APPROVAL_V1", [
-    ["bundle_id", input.bundle_id],
-    ["bundle_hash_sha256", input.bundle_hash_sha256],
-    ["payment_count", input.payment_count],
-    ["approver_id", input.approver_id],
-    ["device_id", input.device_id],
-    ["share_index", input.share_index],
-    ["key_id", input.key_id],
-    ["approved_at", input.approved_at]
+    ["bundle_id", input.bundle_id, "string"],
+    ["bundle_hash_sha256", input.bundle_hash_sha256, "string"],
+    ["payment_count", input.payment_count, "integer"],
+    ["approver_id", input.approver_id, "string"],
+    ["device_id", input.device_id, "string"],
+    ["share_index", input.share_index, "integer"],
+    ["key_id", input.key_id, "string"],
+    ["approved_at", input.approved_at, "string"]
   ]);
 }
 
@@ -192,16 +229,59 @@ export async function webauthnApprovalChallengeV1(input, cryptoProvider = global
   }
   assertPattern("key_id", input.key_id, ID_8_128);
   assertPattern("credential_id", input.credential_id, BASE64URL);
+  // #19: fold a server-issued, single-use, expiring nonce (and its
+  // server-authoritative expiry) into the challenge so the WebAuthn assertion is
+  // FRESH. Without this the challenge is fully client-derived and deterministic
+  // for a given bundle, so an assertion for that bundle could be REPLAYED. The
+  // backend issues challenge_nonce from /api/approval/webauthn-challenge-nonce,
+  // recomputes this exact challenge with the stored nonce + expiry, verifies the
+  // assertion against it, and consumes the nonce (single-use) — rejecting replays.
+  assertPattern("challenge_nonce", input.challenge_nonce, BASE64URL);
+  assertDateTime("challenge_nonce_expires_at", input.challenge_nonce_expires_at);
 
   const challengeContext = canonicalText("APPROVAL_WEBAUTHN_BUNDLE_APPROVAL_V1", [
-    ["bundle_id", input.bundle_id],
-    ["bundle_hash_sha256", input.bundle_hash_sha256],
-    ["payment_count", input.payment_count],
-    ["approver_id", input.approver_id],
-    ["device_id", input.device_id],
-    ["share_index", input.share_index],
-    ["key_id", input.key_id],
-    ["credential_id", input.credential_id]
+    ["bundle_id", input.bundle_id, "string"],
+    ["bundle_hash_sha256", input.bundle_hash_sha256, "string"],
+    ["payment_count", input.payment_count, "integer"],
+    ["approver_id", input.approver_id, "string"],
+    ["device_id", input.device_id, "string"],
+    ["share_index", input.share_index, "integer"],
+    ["key_id", input.key_id, "string"],
+    ["credential_id", input.credential_id, "string"],
+    ["challenge_nonce", input.challenge_nonce, "string"],
+    ["challenge_nonce_expires_at", input.challenge_nonce_expires_at, "string"]
+  ]);
+  return sha256(challengeContext, cryptoProvider);
+}
+
+// Step-up challenge for ADDING a new WebAuthn credential once an approver/device
+// context is ALREADY enrolled. It must be signed by an EXISTING enrolled
+// credential for that context, proving possession of the current passkey — so a
+// holder of a stolen phone share alone cannot graft an attacker passkey onto a
+// victim's context (the credential is a true second factor). A fresh, single-use,
+// expiring nonce makes it non-replayable, and the NEW credential id + public key
+// are bound in so a captured step-up assertion cannot authorize a different key.
+export async function webauthnEnrollmentStepUpChallengeV1(input, cryptoProvider = globalThis.crypto) {
+  assertPattern("approver_id", input.approver_id, APPROVER_ID);
+  assertPattern("device_id", input.device_id, DEVICE_ID);
+  if (![3, 4].includes(input.share_index)) {
+    throw new RangeError("share_index must be 3 or 4");
+  }
+  assertPattern("key_id", input.key_id, ID_8_128);
+  assertPattern("new_credential_id", input.new_credential_id, BASE64URL);
+  assertPattern("new_public_key_spki_base64url", input.new_public_key_spki_base64url, BASE64URL);
+  assertPattern("challenge_nonce", input.challenge_nonce, BASE64URL);
+  assertDateTime("challenge_nonce_expires_at", input.challenge_nonce_expires_at);
+
+  const challengeContext = canonicalText("APPROVAL_WEBAUTHN_ENROLLMENT_STEP_UP_V1", [
+    ["approver_id", input.approver_id, "string"],
+    ["device_id", input.device_id, "string"],
+    ["share_index", input.share_index, "integer"],
+    ["key_id", input.key_id, "string"],
+    ["new_credential_id", input.new_credential_id, "string"],
+    ["new_public_key_spki_base64url", input.new_public_key_spki_base64url, "string"],
+    ["challenge_nonce", input.challenge_nonce, "string"],
+    ["challenge_nonce_expires_at", input.challenge_nonce_expires_at, "string"]
   ]);
   return sha256(challengeContext, cryptoProvider);
 }
@@ -230,7 +310,18 @@ function assertBankSigningInputShapeV1(input) {
 }
 
 function assertBankReadSigningInputShapeV1(input) {
-  if (input?.version !== "bank_read_signing_input_v1") {
+  // Allow-list matching bank_read_signing_input_v1.schema.json (required +
+  // optional), so unmodeled fields are rejected like the schema's
+  // additionalProperties:false. A bare read carries only the required keys; the
+  // polling-capability extras (scope/slot_index/.../phone_sign_share_base64url)
+  // are optional here and are further validated by validatePollingCapabilityPackageV1.
+  assertModeledObject(
+    "bank read signing input",
+    input,
+    ["version", "request_id", "method", "path", "signed_headers"],
+    ["scope", "slot_index", "deterministic_index", "chunk_index", "external_ids", "phone_sign_share_base64url"]
+  );
+  if (input.version !== "bank_read_signing_input_v1") {
     throw new RangeError("Bank read signing input version must be bank_read_signing_input_v1");
   }
   assertPattern("request_id", input.request_id, ID_8_128);
@@ -387,37 +478,279 @@ export function normalizeVisiblePaymentV1(payment) {
   };
 }
 
+// Strict JSON parse for the bank request body. Standard JSON, but it rejects duplicate object
+// member names — an "ambiguous encoding": JSON.parse silently keeps last-wins while the bank's
+// parser may keep first, so identical signed bytes could be displayed one way and executed
+// another. Member assignment uses defineProperty (never `object[key] = ...`) so a "__proto__"
+// member cannot poison the prototype chain.
+function parseStrictJson(text) {
+  let i = 0;
+  const length = text.length;
+  const fail = (message) => {
+    throw new Error(`bank request body is not strict JSON: ${message}`);
+  };
+  const skipWhitespace = () => {
+    while (i < length) {
+      const char = text[i];
+      if (char === " " || char === "\t" || char === "\n" || char === "\r") {
+        i += 1;
+      } else {
+        break;
+      }
+    }
+  };
+
+  function parseString() {
+    i += 1;
+    let out = "";
+    while (i < length) {
+      const char = text[i];
+      if (char === "\"") {
+        i += 1;
+        return out;
+      }
+      if (char === "\\") {
+        const escape = text[i + 1];
+        if (escape === "\"" || escape === "\\" || escape === "/") { out += escape; i += 2; continue; }
+        if (escape === "b") { out += "\b"; i += 2; continue; }
+        if (escape === "f") { out += "\f"; i += 2; continue; }
+        if (escape === "n") { out += "\n"; i += 2; continue; }
+        if (escape === "r") { out += "\r"; i += 2; continue; }
+        if (escape === "t") { out += "\t"; i += 2; continue; }
+        if (escape === "u") {
+          const hex = text.slice(i + 2, i + 6);
+          if (!/^[0-9a-fA-F]{4}$/u.test(hex)) { fail("invalid unicode escape"); }
+          out += String.fromCharCode(Number.parseInt(hex, 16));
+          i += 6;
+          continue;
+        }
+        fail("invalid string escape");
+      }
+      if (char < " ") { fail("unescaped control character in string"); }
+      out += char;
+      i += 1;
+    }
+    fail("unterminated string");
+  }
+
+  function parseNumber() {
+    const start = i;
+    if (text[i] === "-") { i += 1; }
+    while (i < length && text[i] >= "0" && text[i] <= "9") { i += 1; }
+    if (text[i] === ".") {
+      i += 1;
+      while (i < length && text[i] >= "0" && text[i] <= "9") { i += 1; }
+    }
+    if (text[i] === "e" || text[i] === "E") {
+      i += 1;
+      if (text[i] === "+" || text[i] === "-") { i += 1; }
+      while (i < length && text[i] >= "0" && text[i] <= "9") { i += 1; }
+    }
+    const token = text.slice(start, i);
+    if (!/^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$/u.test(token)) { fail("invalid number"); }
+    return Number(token);
+  }
+
+  function parseValue() {
+    skipWhitespace();
+    if (i >= length) { fail("unexpected end of input"); }
+    const char = text[i];
+    if (char === "{") { return parseObject(); }
+    if (char === "[") { return parseArray(); }
+    if (char === "\"") { return parseString(); }
+    if (char === "-" || (char >= "0" && char <= "9")) { return parseNumber(); }
+    if (text.startsWith("true", i)) { i += 4; return true; }
+    if (text.startsWith("false", i)) { i += 5; return false; }
+    if (text.startsWith("null", i)) { i += 4; return null; }
+    fail("unexpected token");
+  }
+
+  function parseArray() {
+    i += 1;
+    const array = [];
+    skipWhitespace();
+    if (text[i] === "]") { i += 1; return array; }
+    for (;;) {
+      array.push(parseValue());
+      skipWhitespace();
+      if (text[i] === ",") { i += 1; continue; }
+      if (text[i] === "]") { i += 1; return array; }
+      fail("expected ',' or ']'");
+    }
+  }
+
+  function parseObject() {
+    i += 1;
+    const object = {};
+    const seen = new Set();
+    skipWhitespace();
+    if (text[i] === "}") { i += 1; return object; }
+    for (;;) {
+      skipWhitespace();
+      if (text[i] !== "\"") { fail("expected object member name"); }
+      const key = parseString();
+      if (seen.has(key)) { fail(`duplicate object member name ${JSON.stringify(key)}`); }
+      seen.add(key);
+      skipWhitespace();
+      if (text[i] !== ":") { fail("expected ':'"); }
+      i += 1;
+      const value = parseValue();
+      Object.defineProperty(object, key, { value, writable: true, enumerable: true, configurable: true });
+      skipWhitespace();
+      if (text[i] === ",") { i += 1; continue; }
+      if (text[i] === "}") { i += 1; return object; }
+      fail("expected ',' or '}'");
+    }
+  }
+
+  const result = parseValue();
+  skipWhitespace();
+  if (i !== length) { fail("unexpected trailing content"); }
+  return result;
+}
+
+function hasOwn(object, key) {
+  return Object.prototype.hasOwnProperty.call(object, key);
+}
+
+function assertModeledObject(name, value, requiredKeys, optionalKeys) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new RangeError(`${name} must be an object`);
+  }
+  const allowed = new Set([...requiredKeys, ...optionalKeys]);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      throw new RangeError(`${name} has unmodeled field "${key}"`);
+    }
+  }
+  for (const key of requiredKeys) {
+    if (!hasOwn(value, key)) {
+      throw new RangeError(`${name} is missing required field "${key}"`);
+    }
+  }
+}
+
+function assertDisplaySafeText(name, value, maxLength) {
+  assertNoLineBreaks(name, value, maxLength);
+  if (DISPLAY_UNSAFE.test(value)) {
+    throw new RangeError(`${name} must not contain unsafe display characters`);
+  }
+}
+
+function assertOptionalDisplaySafeText(name, object, key, maxLength) {
+  if (hasOwn(object, key)) {
+    assertDisplaySafeText(`${name}.${key}`, object[key], maxLength);
+  }
+}
+
+function assertModeledBbanAccount(name, account, optionalKeys) {
+  assertModeledObject(name, account, ["type", "value"], optionalKeys);
+  // `type` selects the account-numbering rail and is bank-honored; an unmodeled rail could route
+  // the same digit string to a different recipient, so pin it to the only sandbox-confirmed value.
+  if (account.type !== "BBAN") {
+    throw new RangeError(`${name}.type must be "BBAN"`);
+  }
+  assertPattern(`${name}.value`, account.value, BBAN_VALUE);
+}
+
+// Pinned Nordea Corporate Payout v2 request body schema — the sandbox-confirmed DK shape produced
+// by the demo fixtures. This is an allow-list: every modeled key is validated and ANY unmodeled key,
+// at any nesting level, is rejected (fail closed). A WYSIWYS signer must provably model 100% of
+// bank-honored content, so the production system must extend this allow-list to every field the real
+// Nordea request sends — reflecting any recipient/amount-determining field in the visible payment and
+// rejecting anything it does not model.
+function parseBankBodyV1(bodyBytes) {
+  let body;
+  try {
+    // Fatal UTF-8 decode: reject (rather than silently U+FFFD-replace) non-UTF-8 bytes, so what the
+    // approver sees cannot diverge from the signed bytes the bank parses.
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bodyBytes);
+    body = parseStrictJson(text);
+  } catch (error) {
+    throw new Error(`Bank request body must be JSON for visible payment derivation: ${error.message}`);
+  }
+
+  // end_to_end_id / external_id are execution-neutral references (passed through to statements and
+  // used for backend idempotency/matching); neither determines recipient or amount, so they are
+  // allow-listed but not displayed.
+  assertModeledObject(
+    "bank body",
+    body,
+    ["template_id", "amount", "currency", "debtor", "creditor"],
+    ["end_to_end_id", "external_id"]
+  );
+  if (body.template_id !== "INSTANT_CREDIT_TRANSFER_DK") {
+    throw new RangeError("template_id must be \"INSTANT_CREDIT_TRANSFER_DK\"");
+  }
+  assertPattern("amount", body.amount, AMOUNT_DECIMAL);
+  if (body.currency !== "DKK") {
+    throw new RangeError("currency must be \"DKK\"");
+  }
+  assertOptionalDisplaySafeText("bank body", body, "end_to_end_id", MAX_BANK_BODY_FIELD);
+  assertOptionalDisplaySafeText("bank body", body, "external_id", MAX_BANK_BODY_FIELD);
+
+  // own_reference is the debtor's own statement text; debtor.account.currency is the funding-account
+  // currency (equal to the payment currency in the confirmed DK scope) — both execution-neutral here.
+  assertModeledObject("debtor", body.debtor, ["account"], ["own_reference"]);
+  assertOptionalDisplaySafeText("debtor", body.debtor, "own_reference", MAX_BANK_BODY_FIELD);
+  assertModeledBbanAccount("debtor.account", body.debtor.account, ["currency"]);
+  if (hasOwn(body.debtor.account, "currency") && body.debtor.account.currency !== "DKK") {
+    throw new RangeError("debtor.account.currency must be \"DKK\"");
+  }
+
+  assertModeledObject("creditor", body.creditor, ["name", "account"], ["bank", "message"]);
+  assertDisplaySafeText("creditor.name", body.creditor.name, 140);
+  if (body.creditor.name.length < 1) {
+    throw new RangeError("creditor.name is required");
+  }
+  assertOptionalDisplaySafeText("creditor", body.creditor, "message", 140);
+  assertModeledBbanAccount("creditor.account", body.creditor.account, []);
+  if (hasOwn(body.creditor, "bank")) {
+    // bank.bank_code is bound to the signed BBAN (validated against the registration prefix in
+    // domesticAccountDisplay); bank.country is a display hint.
+    assertModeledObject("creditor.bank", body.creditor.bank, [], ["country", "bank_code"]);
+    if (hasOwn(body.creditor.bank, "country") && body.creditor.bank.country !== "DK") {
+      throw new RangeError("creditor.bank.country must be \"DK\"");
+    }
+    assertOptionalDisplaySafeText("creditor.bank", body.creditor.bank, "bank_code", 16);
+  }
+
+  return body;
+}
+
 function domesticAccountDisplay(account, bank, body) {
-  const value = account?.value ?? account;
-  const templateId = typeof body?.template_id === "string" ? body.template_id : "";
-  if (
-    account?.type === "BBAN" &&
-    typeof value === "string" &&
-    /^[0-9]{14}$/u.test(value) &&
-    (bank?.country === "DK" || bank?.bank_code || templateId.endsWith("_DK") || body?.currency === "DKK")
-  ) {
-    const bankCode = typeof bank?.bank_code === "string" && bank.bank_code ? bank.bank_code : value.slice(0, 4);
-    const accountNumber = value.startsWith(bankCode) ? value.slice(bankCode.length) : value.slice(4);
-    return `${bankCode} ${accountNumber}`;
+  // `account` is already validated as a BBAN with a 14-digit value by parseBankBodyV1.
+  const value = account.value;
+  const templateId = body.template_id;
+  if (bank?.country === "DK" || bank?.bank_code || templateId.endsWith("_DK") || body.currency === "DKK") {
+    const regCode = value.slice(0, 4);
+    if (typeof bank?.bank_code === "string" && bank.bank_code && bank.bank_code !== regCode) {
+      throw new Error("creditor bank_code does not match BBAN registration number");
+    }
+    return `${regCode} ${value.slice(4)}`;
   }
   return value;
 }
 
 export function deriveVisiblePaymentFromBankBodyV1(bodyBytes) {
-  let body;
-  try {
-    body = JSON.parse(utf8Decode(bodyBytes));
-  } catch {
-    throw new Error("Bank request body must be JSON for visible payment derivation");
+  const body = parseBankBodyV1(bodyBytes);
+
+  const amountMinor = decimalAmountToMinor(body.amount);
+  const minor = BigInt(amountMinor);
+  if (minor <= 0n) {
+    throw new RangeError("amount must be greater than zero");
+  }
+  if (minor > MAX_AMOUNT_MINOR) {
+    throw new RangeError("amount exceeds the maximum supported value");
   }
 
   return normalizeVisiblePaymentV1({
-    creditor_name: body.creditor?.name,
-    creditor_account: domesticAccountDisplay(body.creditor?.account, body.creditor?.bank, body),
-    debtor_account_masked: body.debtor?.account_masked ?? maskAccount(body.debtor?.account?.value),
-    amount_minor: body.amount?.minor !== undefined ? String(body.amount.minor) : decimalAmountToMinor(body.amount),
-    currency: body.amount?.currency ?? body.currency,
-    remittance_text: body.remittance_text ?? body.creditor?.message ?? body.creditor?.reference?.value ?? body.end_to_end_id ?? ""
+    creditor_name: body.creditor.name,
+    creditor_account: domesticAccountDisplay(body.creditor.account, body.creditor.bank, body),
+    debtor_account_masked: maskAccount(body.debtor.account.value),
+    amount_minor: amountMinor,
+    currency: body.currency,
+    remittance_text: hasOwn(body.creditor, "message") ? body.creditor.message : ""
   });
 }
 
@@ -590,43 +923,120 @@ export async function validateBundleForApprovalV1(bundle, cryptoProvider = globa
   return commitments;
 }
 
+function assertBundleApprovalHashArray(name, value, paymentCount) {
+  if (!Array.isArray(value) || value.length !== paymentCount) {
+    throw new RangeError(`${name} length must equal payment_count`);
+  }
+  for (const hash of value) {
+    assertHex64(name, hash);
+  }
+}
+
+function assertBundleApprovalWebauthnAssertionV1(assertion) {
+  assertModeledObject(
+    "webauthn_assertion",
+    assertion,
+    [
+      "credential_id",
+      "client_data_json_base64url",
+      "authenticator_data_base64url",
+      "signature_base64url",
+      "user_verification",
+      // #19: the fresh, single-use challenge nonce + its server-authoritative
+      // expiry the assertion was bound to, carried so the backend can recompute
+      // the challenge and consume the nonce (rejecting replays).
+      "challenge_nonce",
+      "challenge_nonce_expires_at"
+    ],
+    []
+  );
+  const boundedBase64url = (name, candidate, min, max) => {
+    if (typeof candidate !== "string" || candidate.length < min || candidate.length > max || !BASE64URL.test(candidate)) {
+      throw new RangeError(`${name} must be ${min}..${max} base64url characters`);
+    }
+  };
+  boundedBase64url("webauthn_assertion.credential_id", assertion.credential_id, 16, 1024);
+  boundedBase64url("webauthn_assertion.client_data_json_base64url", assertion.client_data_json_base64url, 16, 8192);
+  boundedBase64url("webauthn_assertion.authenticator_data_base64url", assertion.authenticator_data_base64url, 16, 4096);
+  boundedBase64url("webauthn_assertion.signature_base64url", assertion.signature_base64url, 16, 2048);
+  if (assertion.user_verification !== "required") {
+    throw new RangeError("webauthn_assertion.user_verification must be \"required\"");
+  }
+  boundedBase64url("webauthn_assertion.challenge_nonce", assertion.challenge_nonce, 16, 256);
+  assertDateTime("webauthn_assertion.challenge_nonce_expires_at", assertion.challenge_nonce_expires_at);
+}
+
+// Authoritative runtime validator for a full bundle_approval_v1 wire object.
+// It is kept provably in lock-step with schemas/bundle_approval_v1.schema.json:
+// the same allow-listed property set, the same required set, and the same per-
+// field constraints (see test/schemas.test.mjs "bundle approval validator
+// matches its schema"). JSON Schema cannot express the cross-field rule that
+// the per-payment arrays have exactly payment_count entries, so the validator
+// is strictly tighter on that one point. The eight scalar fields that are
+// actually signed are validated via assertBundleApprovalCanonicalFieldsV1, the
+// same helper the canonical text encoder uses.
 export function validateBundleApprovalEnvelopeInputV1(input) {
-  if (input?.version !== undefined && input.version !== "bundle_approval_v1") {
+  assertModeledObject(
+    "bundle approval",
+    input,
+    [
+      "version",
+      "bundle_id",
+      "bundle_hash_sha256",
+      "approver_id",
+      "device_id",
+      "share_index",
+      "key_id",
+      "payment_count",
+      "totals",
+      "bank_request_hashes",
+      "visible_line_item_hashes",
+      "webauthn_assertion",
+      "phone_sign_shares",
+      "approved_at"
+    ],
+    ["polling_capability_package"]
+  );
+  if (input.version !== "bundle_approval_v1") {
     throw new RangeError("bundle approval version must be bundle_approval_v1");
   }
-  assertPattern("bundle_id", input.bundle_id, ID_8_128);
-  assertHex64("bundle_hash_sha256", input.bundle_hash_sha256);
-  assertPaymentCount(input.payment_count);
-  assertPattern("approver_id", input.approver_id, APPROVER_ID);
-  assertPattern("device_id", input.device_id, DEVICE_ID);
-  if (![3, 4].includes(input.share_index)) {
-    throw new RangeError("share_index must be 3 or 4");
-  }
-  assertPattern("key_id", input.key_id, ID_8_128);
-  assertDateTime("approved_at", input.approved_at);
+  assertBundleApprovalCanonicalFieldsV1(input);
 
-  if (input.bank_request_hashes !== undefined) {
-    if (!Array.isArray(input.bank_request_hashes) || input.bank_request_hashes.length !== input.payment_count) {
-      throw new RangeError("bank_request_hashes length must equal payment_count");
-    }
-    for (const hash of input.bank_request_hashes) {
-      assertHex64("bank_request_hash", hash);
-    }
+  if (!Array.isArray(input.totals) || input.totals.length < 1 || input.totals.length > 10) {
+    throw new RangeError("totals must contain 1..10 currency totals");
   }
-  if (input.visible_line_item_hashes !== undefined) {
-    if (!Array.isArray(input.visible_line_item_hashes) || input.visible_line_item_hashes.length !== input.payment_count) {
-      throw new RangeError("visible_line_item_hashes length must equal payment_count");
+  const seenTotals = new Set();
+  for (const total of input.totals) {
+    assertModeledObject("total", total, ["currency", "amount_minor"], []);
+    assertPattern("total currency", total.currency, CURRENCY);
+    if (typeof total.amount_minor !== "string" || total.amount_minor.length > 32 || !AMOUNT_MINOR.test(total.amount_minor)) {
+      throw new RangeError("total amount_minor must be a numeric string of at most 32 digits");
     }
-    for (const hash of input.visible_line_item_hashes) {
-      assertHex64("visible_line_item_hash", hash);
+    // Matches the schema's uniqueItems: a total object only has currency and
+    // amount_minor, so identical (currency, amount_minor) pairs are duplicates.
+    const totalKey = `${total.currency} ${total.amount_minor}`;
+    if (seenTotals.has(totalKey)) {
+      throw new RangeError("totals must not contain duplicate entries");
     }
+    seenTotals.add(totalKey);
   }
-  if (input.phone_sign_shares !== undefined && (
+
+  assertBundleApprovalHashArray("bank_request_hashes", input.bank_request_hashes, input.payment_count);
+  assertBundleApprovalHashArray("visible_line_item_hashes", input.visible_line_item_hashes, input.payment_count);
+
+  if (
     !Array.isArray(input.phone_sign_shares) ||
     input.phone_sign_shares.length !== input.payment_count ||
-    input.phone_sign_shares.some((share) => typeof share !== "string" || !BASE64URL.test(share))
-  )) {
-    throw new RangeError("phone_sign_shares length must equal payment_count and contain base64url values");
+    input.phone_sign_shares.some((share) =>
+      typeof share !== "string" || share.length < 12 || share.length > 1024 || !BASE64URL.test(share))
+  ) {
+    throw new RangeError("phone_sign_shares must contain payment_count base64url shares of 12..1024 characters");
+  }
+
+  assertBundleApprovalWebauthnAssertionV1(input.webauthn_assertion);
+
+  if (input.polling_capability_package !== undefined) {
+    validatePollingCapabilityPackageV1(input.polling_capability_package);
   }
 }
 
@@ -653,7 +1063,17 @@ export function validatePollingCapabilityPackageV1(pkg) {
   if (pkg === undefined || pkg === null) {
     return null;
   }
-  if (pkg?.version !== "polling_capability_package_v1") {
+  // Allow-list matching polling_capability_package_v1.schema.json
+  // (additionalProperties:false); the runtime is additionally stricter than the
+  // bank_read schema in requiring scope/slot_index/phone_sign_share_base64url on
+  // every polling request, so any package it accepts is also schema-valid.
+  assertModeledObject(
+    "polling capability package",
+    pkg,
+    ["version", "bundle_id", "created_at", "valid_until", "horizon_hours", "slot_interval_minutes", "requests"],
+    []
+  );
+  if (pkg.version !== "polling_capability_package_v1") {
     throw new RangeError("polling capability package version must be polling_capability_package_v1");
   }
   assertPattern("polling bundle_id", pkg.bundle_id, ID_8_128);
@@ -676,7 +1096,18 @@ export function validatePollingCapabilityPackageV1(pkg) {
     if (!Number.isInteger(request.slot_index) || request.slot_index < 0 || request.slot_index > 96) {
       throw new RangeError("polling request slot_index is invalid");
     }
-    if (typeof request.phone_sign_share_base64url !== "string" || !BASE64URL.test(request.phone_sign_share_base64url)) {
+    if (
+      request.deterministic_index !== undefined &&
+      (!Number.isInteger(request.deterministic_index) || request.deterministic_index < 0)
+    ) {
+      throw new RangeError("polling request deterministic_index is invalid");
+    }
+    if (
+      typeof request.phone_sign_share_base64url !== "string" ||
+      request.phone_sign_share_base64url.length < 12 ||
+      request.phone_sign_share_base64url.length > 1024 ||
+      !BASE64URL.test(request.phone_sign_share_base64url)
+    ) {
       throw new RangeError("polling request phone_sign_share_base64url is invalid");
     }
     if (request.scope === "bundle_payment_status") {

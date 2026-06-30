@@ -9,11 +9,11 @@
     },
     {
       "path": "index.html",
-      "sha256": "83fae9a83e970a3afe40f6b25e823efd3aaf8dacc97e489609de1c0502aef148"
+      "sha256": "393456a7fc9761b5619f4f7fbc00746dbfac6561012707d2da5a2321b31057d8"
     },
     {
       "path": "kernel.html",
-      "sha256": "e74b1e1f7b8bf297104b09a0d0bc5b8b3bda57b428fed56ddfd50ff5faf38ee9"
+      "sha256": "9bf41f4fdc4c566952a46946817c15de79ebb62eae0d3a7bcba8e9bd4f7e499f"
     },
     {
       "path": "manifest.webmanifest",
@@ -21,31 +21,39 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "56768e313dd1d969af5265b8790cbf9d9c64a9ca95c1a2c940c841447d72b332"
+      "sha256": "4aa3465259f439c2f3153731f2781901322633855ce8977a8e889b7456c34e1c"
     },
     {
       "path": "src/api-client.js",
-      "sha256": "7391662780dae82fd79c4be332e270acc024c7c59c82f22ed0a2ac5be8e8c34a"
+      "sha256": "9032f23b3997ab97f57180da58d52fec5e52b089632c053212a0d0d1d4915d6a"
     },
     {
       "path": "src/app.js",
-      "sha256": "c7c7b664c771ae79babc9b6598b805aeefcd14f018fbe78b30d7495e23b2a930"
+      "sha256": "94ff5a6530d3fe1ca08004d67f420e62ef3f29013cf14978648b3c817b21541e"
     },
     {
       "path": "src/approval-kernel.js",
-      "sha256": "8e37cc1be953ba8e9f69edbe3752d4a41389e4c35ed19ce5e34a2f0d8e8f32e1"
+      "sha256": "9ba6589b6ceb6472d4de5cfd602a7f0b42f3c89d566e4d54754cef17cc9a9328"
     },
     {
       "path": "src/assets/icon.svg",
       "sha256": "cf17f23b46ba0403b904fccc91e195b7503f8a38c5c679acf5c470bffe9a71cd"
     },
     {
+      "path": "src/backup-recovery.js",
+      "sha256": "693dfd39304e618b77facd9e78d295d3dd361fb2bac95b39d7ddec58df77bd47"
+    },
+    {
       "path": "src/bank-signing-batch.js",
       "sha256": "becf1883161dd73e52a0891cb5d4ea292bd63e95fc0e69f3aa8caa88699282e8"
     },
     {
+      "path": "src/bootstrap.js",
+      "sha256": "973a0849e10269d927c03075fa1ad8779b7092f46baf54ac6ea69cd7f84c8f28"
+    },
+    {
       "path": "src/core/crypto/bigint.js",
-      "sha256": "71897137df06b9c36519be20e3d8f31a95b1163645862f880a72e9f64a8662b1"
+      "sha256": "4f7bdbb68a143ea1f7e89faaee43d4f8c7f2fd6b7f3d2c6410a8453fe9e05f86"
     },
     {
       "path": "src/core/crypto/bytes.js",
@@ -53,11 +61,11 @@
     },
     {
       "path": "src/core/crypto/circl-keyshare.js",
-      "sha256": "0aa08f79b3958bca9dd0b843349dbea8f4387ce4732da9b86609ce54e0fc18ee"
+      "sha256": "ac16c6a54845f304c59210187063d2eb10d3556417691fab5d649e889881f204"
     },
     {
       "path": "src/core/crypto/circl-signshare.js",
-      "sha256": "3091ec13c6cc3ffba39567d845964cb36a8711b0379482d35637e7ed963dfc8c"
+      "sha256": "356f700d836a10c0d5e5c34e83fbc51696c38fda1f6f2d38a39b3fac9f795f82"
     },
     {
       "path": "src/core/crypto/pkcs1v15.js",
@@ -65,15 +73,15 @@
     },
     {
       "path": "src/core/crypto/threshold-rsa.js",
-      "sha256": "af38f2f7a0be976301a4629f3f8da013ae951dfb46aaaa32b679073b15628331"
+      "sha256": "d818a42ecf30d0ecc70de35a23034a91893db6ce4f322b98cde107c7c0484037"
     },
     {
       "path": "src/core/protocol/canonical.js",
-      "sha256": "60d6f01e84f5e8e5f94a957672ecae144a64f85b337249d695bb338de80dc451"
+      "sha256": "d7c044482f5f4b4bf4957a91edefd83c0dfa41721b779da5cda397c320c886c7"
     },
     {
       "path": "src/core/protocol/envelopes.js",
-      "sha256": "e1b2ec85c2d4d30643a4c2f70249bf5ffae55c311aeb3e273d6761977e4344f1"
+      "sha256": "2e5488da682062de9f9a3803b9ec6416a6232f54dc4eb62b716a7983cb541044"
     },
     {
       "path": "src/core/protocol/signing.js",
@@ -84,12 +92,24 @@
       "sha256": "fea9b1d0b56a542d46b6fff2fc5d96870fc5f647e19f6a8367db5a8962224495"
     },
     {
+      "path": "src/frame-buster.js",
+      "sha256": "3461a3fcc5c5e221dc763a783a97d2e43a4b284d62547908739084c08ba64f49"
+    },
+    {
+      "path": "src/frame-messaging.js",
+      "sha256": "c3a3c7d91d5d35ae5312dd6f201b8dfeadc9f7cbd4a70020f9f0b5cc36791e91"
+    },
+    {
       "path": "src/integrity.js",
-      "sha256": "12dfc942a10138a45ec0973da90d62a661bee6e1e1e006b863770c28b30e3609"
+      "sha256": "f457f48ffe3b47a19612ed771b6c5f4a511be5435445e16885c6f2c8b28115d1"
+    },
+    {
+      "path": "src/json-schema-validate.js",
+      "sha256": "75e0d67d113dcbbbd52cdc0f92d6725159863a2d03b4050100500fa55addafd1"
     },
     {
       "path": "src/kernel-frame.js",
-      "sha256": "1c4a557e89b1e99c5b54594ba3f21235e056105ed7042df87bed21858413f29e"
+      "sha256": "6bf4a9976d4d378c053d35118cb72c97c87f6b4733eb324ce9e608305d97be56"
     },
     {
       "path": "src/payment-view.js",
@@ -98,6 +118,14 @@
     {
       "path": "src/polling-capabilities.js",
       "sha256": "6c7cb8e63d53b52bcb5992c4c9593b270fbf1b1011589dbf59ecd8b45ce8aa47"
+    },
+    {
+      "path": "src/qr-encode.js",
+      "sha256": "5df40d54fd84152bc437395aa45216be8bddac65256e81a38afdc6a2aec9c101"
+    },
+    {
+      "path": "src/response-schemas.js",
+      "sha256": "ce3affea70d5e7c27a676299453d2f9b1a63c4f369f83ec426dac22b828f8151"
     },
     {
       "path": "src/sign-task-worker.js",
@@ -109,19 +137,23 @@
     },
     {
       "path": "src/signing-worker-pool.js",
-      "sha256": "94fa8612ac67eee596974c4caa2f594556ef80cec61612f1019c08335fc7224a"
+      "sha256": "8f121f03824c9c8a0313e23258284caa93f95998ca4ca291cbed5c01f330aa14"
     },
     {
       "path": "src/storage.js",
-      "sha256": "e98e8df30f7749f3895d847a51956b6c322e1637fe3abb09460af489a1f9a32c"
+      "sha256": "97a3733693adb232bf7fd4a62e4db4db24563ee60f643ac35902a34574f3c281"
     },
     {
       "path": "src/styles.css",
-      "sha256": "3df9d7b2cd6d1b0489bb1127d20ec504e590d7fc902906e70c1f1369e4103142"
+      "sha256": "eca4a27556693b970597de90b84844f5b6212cffbca90f2e899ae4d46c8716a0"
+    },
+    {
+      "path": "src/sw-integrity.js",
+      "sha256": "78504887d9f48b80de903d4dd3136ae4cc5885749bc0006cb0d5d8229fd4bcd8"
     },
     {
       "path": "src/webauthn.js",
-      "sha256": "66ca86d0ea60ad76e5432d08289a9d93a9ea9a194362df9d163e598b7c22520e"
+      "sha256": "d8e4ae409838d8ebca43186a38df41a5910d77c0f3b7fe5822308a63f934aec9"
     }
   ]
 }
