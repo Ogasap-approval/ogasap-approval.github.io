@@ -1922,7 +1922,38 @@ async function init() {
   });
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./service-worker.js", { type: "module" }).catch(() => {});
+    // Strict cache-first SW (see pwa/service-worker.js): a deployed CACHE_NAME
+    // bump only reaches installed clients if the browser actually re-fetches the
+    // worker and installs it. Fire-and-forget register() left installed PWAs
+    // serving stale bytes until a stray navigation happened to trigger a check.
+    // updateViaCache:"none" keeps the worker script (and its imports) off the
+    // HTTP cache; update() on load and on every foreground actively pulls a new
+    // worker; controllerchange reloads once so the page runs the new code.
+    navigator.serviceWorker.register("./service-worker.js", {
+      type: "module",
+      updateViaCache: "none"
+    }).then((registration) => {
+      registration.update().catch(() => {});
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") {
+          registration.update().catch(() => {});
+        }
+      });
+    }).catch(() => {});
+
+    // Only reload when a NEW worker supersedes an existing controller. On a
+    // first-ever install controller is null and clients.claim() still fires
+    // controllerchange — guarding on controller avoids a spurious reload then.
+    if (navigator.serviceWorker.controller) {
+      let reloadedForUpdate = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (reloadedForUpdate) {
+          return;
+        }
+        reloadedForUpdate = true;
+        window.location.reload();
+      });
+    }
   }
 
   // Issue #26: gate every local-AES share unwrap behind a WebAuthn UV ceremony.
