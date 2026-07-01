@@ -9,11 +9,11 @@
     },
     {
       "path": "index.html",
-      "sha256": "11b2658fe2440d2535ec4181a9d229dfd7187b90010d497d72831ea921ddec49"
+      "sha256": "a450ce7ab6ccfd0f594837e1312c8101b2f54e69fd91d6ee376fc92db05f0dbd"
     },
     {
       "path": "kernel.html",
-      "sha256": "30d5b8d5b8688c9e5fbdc04470804f11f534ccf74191c1db15f86790760b430b"
+      "sha256": "4c8db42ce2ff19ae384bc7857714e31e3911868f89390d917eaee64539b94755"
     },
     {
       "path": "manifest.webmanifest",
@@ -21,11 +21,11 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "38bdd9238970e3b690f3d424eed12cb9b389fdd7e5c9d4f7059b1ecce5ffee94"
+      "sha256": "980ea19dd4fe31aa9954dfa064a607c971c1e0bac28bd3c7b3b8ec68c81e39bb"
     },
     {
       "path": "src/api-client.js",
-      "sha256": "0f350ea5ae6731468d1b42c8c6eeb2db3a94145ec634876708e609a082790203"
+      "sha256": "2e8937dee198b43dcebf92137ea723b3a1259a3fdd9cad37fd5aae018b82bfc2"
     },
     {
       "path": "src/app.js",
@@ -33,7 +33,7 @@
     },
     {
       "path": "src/approval-kernel.js",
-      "sha256": "9ba6589b6ceb6472d4de5cfd602a7f0b42f3c89d566e4d54754cef17cc9a9328"
+      "sha256": "a2375388cfe091c564413ec77f597d79aaf257a6289d9c815cbcf90bc3cbb845"
     },
     {
       "path": "src/assets/icon.svg",
@@ -49,7 +49,7 @@
     },
     {
       "path": "src/bootstrap.js",
-      "sha256": "973a0849e10269d927c03075fa1ad8779b7092f46baf54ac6ea69cd7f84c8f28"
+      "sha256": "edb227fd3d5e6651660c7956a76e4208eccc07d4cfa60aa33ff877b2f15db345"
     },
     {
       "path": "src/core/crypto/bigint.js",
@@ -81,7 +81,11 @@
     },
     {
       "path": "src/core/protocol/envelopes.js",
-      "sha256": "2e5488da682062de9f9a3803b9ec6416a6232f54dc4eb62b716a7983cb541044"
+      "sha256": "1ee509e666069c678d670b56b463958d27b912d402f18d7bf6c69c23e01b30c8"
+    },
+    {
+      "path": "src/core/protocol/release.js",
+      "sha256": "b96bb2acbae2c53872d4966266fe45017978aa4650b82392227e145640ff5118"
     },
     {
       "path": "src/core/protocol/signing.js",
@@ -101,7 +105,7 @@
     },
     {
       "path": "src/integrity.js",
-      "sha256": "f457f48ffe3b47a19612ed771b6c5f4a511be5435445e16885c6f2c8b28115d1"
+      "sha256": "4471eaffa8ef905f5f73ac23277c1c1b46524c5643026eb9b887da20436bba28"
     },
     {
       "path": "src/json-schema-validate.js",

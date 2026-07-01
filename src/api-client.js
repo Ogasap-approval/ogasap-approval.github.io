@@ -3,6 +3,7 @@ import { unmarshalSignShare } from "./core/crypto/circl-signshare.js";
 import { pkcs1v15PaddedMessageForModulus } from "./core/crypto/pkcs1v15.js";
 import { combineSignShares } from "./core/crypto/threshold-rsa.js";
 import { sha256Hex } from "./core/protocol/canonical.js";
+import { PROTOCOL_RELEASE_ID } from "./core/protocol/release.js";
 import {
   decodePhoneSharePackageV1,
   signBackendAuthEnvelopeV1,
@@ -322,6 +323,7 @@ async function signedApprovalHeaders({ method, path, bodyBytes = EMPTY_BODY, pho
   const clientNonce = randomNonce();
   const envelope = {
     method: upperMethod,
+    protocol_release_id: PROTOCOL_RELEASE_ID,
     path,
     body_sha256: bodySha256,
     bodyBytes,
@@ -342,6 +344,7 @@ async function signedApprovalHeaders({ method, path, bodyBytes = EMPTY_BODY, pho
       "Accept": "application/json",
       "X-Approval-Backend-Auth": backendAuthHeaderValue({
         version: "backend_auth_envelope_v1",
+        protocol_release_id: envelope.protocol_release_id,
         method: envelope.method,
         path: envelope.path,
         body_sha256: envelope.body_sha256,

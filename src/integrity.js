@@ -43,6 +43,7 @@ export const APP_INTEGRITY_GRAPH = [
   "src/core/crypto/threshold-rsa.js",
   "src/core/protocol/canonical.js",
   "src/core/protocol/envelopes.js",
+  "src/core/protocol/release.js",
   "src/core/protocol/signing.js"
 ];
 

@@ -1,6 +1,7 @@
 import { base64urlToBytes, bytesToHex, utf8Encode } from "../crypto/bytes.js";
 import { emsaPkcs1v15Encode, sha256 } from "../crypto/pkcs1v15.js";
 import { canonicalJsonBytes, canonicalText, sha256Hex, stableStringify } from "./canonical.js";
+import { PROTOCOL_RELEASE_ID } from "./release.js";
 
 const BACKEND_PATH = /^\/api\/approval(\/[A-Za-z0-9._~!$&'()*+,;=:@%-]+)*$/u;
 const HEX_64 = /^[a-f0-9]{64}$/u;
@@ -25,6 +26,51 @@ const MAX_POLLING_CAPABILITY_REQUESTS = 2500;
 const MAX_POLLING_EXTERNAL_IDS = 20;
 const ORIGINATING_HOST_HEADER = /^x-[a-z0-9-]+-originating-host$/u;
 const ORIGINATING_DATE_HEADER = /^x-[a-z0-9-]+-originating-date$/u;
+const PROTOCOL_RELEASE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]{7,127}$/u;
+
+// Protocol release-id binding (issue #71). PROTOCOL_RELEASE_ID is derived from
+// this build's canonical core (tools/generate-protocol-release.mjs) and bound
+// into the signed bytes of the auth + bundle-approval envelopes. The verifier
+// rejects an envelope whose id is not on its allowlist with a DISTINCT error, so
+// deploy skew between the phone and the backend fails closed and attributably
+// instead of as an opaque signature mismatch at payment time.
+export { PROTOCOL_RELEASE_ID };
+export const ACCEPTED_PROTOCOL_RELEASE_IDS = Object.freeze([PROTOCOL_RELEASE_ID]);
+
+export class ProtocolReleaseError extends Error {
+  constructor(message, releaseId) {
+    super(message);
+    this.name = "ProtocolReleaseError";
+    this.code = "protocol_release_rejected";
+    this.releaseId = releaseId;
+  }
+}
+
+// Verifier-side gate: throws ProtocolReleaseError (NOT a generic signature
+// failure) when the carried protocol_release_id is missing, malformed, or not on
+// the allowlist. `accepted` lets a deployment widen the set during a rolling
+// protocol bump.
+export function assertAcceptedProtocolReleaseId(releaseId, accepted = ACCEPTED_PROTOCOL_RELEASE_IDS) {
+  if (typeof releaseId !== "string" || !PROTOCOL_RELEASE_ID_PATTERN.test(releaseId)) {
+    throw new ProtocolReleaseError("protocol_release_id is missing or malformed", releaseId);
+  }
+  if (!accepted.includes(releaseId)) {
+    throw new ProtocolReleaseError(`protocol_release_id "${releaseId}" is not an accepted protocol release`, releaseId);
+  }
+  return releaseId;
+}
+
+// Signer-side: every signed envelope carries protocol_release_id in its canonical
+// bytes. Verification re-derives the exact bytes from the wire envelope, so the
+// canonical builders read the carried value; signers that omit it default to this
+// build's id.
+function resolveProtocolReleaseId(value) {
+  const releaseId = value ?? PROTOCOL_RELEASE_ID;
+  if (typeof releaseId !== "string" || !PROTOCOL_RELEASE_ID_PATTERN.test(releaseId)) {
+    throw new RangeError("protocol_release_id is invalid");
+  }
+  return releaseId;
+}
 
 function assertPattern(name, value, pattern) {
   if (typeof value !== "string" || !pattern.test(value)) {
@@ -129,6 +175,7 @@ export async function canonicalBackendAuthEnvelopeV1(input, cryptoProvider = glo
   }
 
   return canonicalText("APPROVAL_BACKEND_API_AUTH_V1", [
+    ["protocol_release_id", resolveProtocolReleaseId(input.protocol_release_id), "string"],
     ["method", method, "string"],
     ["path", input.path, "string"],
     ["body_sha256", bodySha256, "string"],
@@ -207,6 +254,7 @@ export function canonicalBundleApprovalEnvelopeV1(input) {
   assertBundleApprovalCanonicalFieldsV1(input);
 
   return canonicalText("APPROVAL_BUNDLE_APPROVAL_V1", [
+    ["protocol_release_id", resolveProtocolReleaseId(input.protocol_release_id), "string"],
     ["bundle_id", input.bundle_id, "string"],
     ["bundle_hash_sha256", input.bundle_hash_sha256, "string"],
     ["payment_count", input.payment_count, "integer"],
@@ -240,6 +288,7 @@ export async function webauthnApprovalChallengeV1(input, cryptoProvider = global
   assertDateTime("challenge_nonce_expires_at", input.challenge_nonce_expires_at);
 
   const challengeContext = canonicalText("APPROVAL_WEBAUTHN_BUNDLE_APPROVAL_V1", [
+    ["protocol_release_id", resolveProtocolReleaseId(input.protocol_release_id), "string"],
     ["bundle_id", input.bundle_id, "string"],
     ["bundle_hash_sha256", input.bundle_hash_sha256, "string"],
     ["payment_count", input.payment_count, "integer"],
@@ -981,6 +1030,7 @@ export function validateBundleApprovalEnvelopeInputV1(input) {
     input,
     [
       "version",
+      "protocol_release_id",
       "bundle_id",
       "bundle_hash_sha256",
       "approver_id",
@@ -1000,6 +1050,7 @@ export function validateBundleApprovalEnvelopeInputV1(input) {
   if (input.version !== "bundle_approval_v1") {
     throw new RangeError("bundle approval version must be bundle_approval_v1");
   }
+  assertPattern("protocol_release_id", input.protocol_release_id, PROTOCOL_RELEASE_ID_PATTERN);
   assertBundleApprovalCanonicalFieldsV1(input);
 
   if (!Array.isArray(input.totals) || input.totals.length < 1 || input.totals.length > 10) {

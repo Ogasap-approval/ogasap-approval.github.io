@@ -2,6 +2,7 @@ import { fetchWebauthnChallengeNonce, submitBundleApproval } from "./api-client.
 import { APP_INTEGRITY_GRAPH, assertResourcesIntegrity } from "./integrity.js";
 import { signBundleBankInputs } from "./bank-signing-batch.js";
 import { validateBundleForApprovalV1, webauthnApprovalChallengeV1 } from "./core/protocol/envelopes.js";
+import { PROTOCOL_RELEASE_ID } from "./core/protocol/release.js";
 import { requestApprovalAssertion } from "./webauthn.js";
 
 // Issue #10: verify the full app-controlled graph (renderer/controller/HTML +
@@ -10,6 +11,7 @@ const SIGN_WORKER_GRAPH = APP_INTEGRITY_GRAPH;
 
 function approvalMetadata({ bundle, phoneSharePackage, webauthnCredential }) {
   return {
+    protocol_release_id: PROTOCOL_RELEASE_ID,
     bundle_id: bundle.bundle_id,
     bundle_hash_sha256: bundle.bundle_hash_sha256,
     payment_count: bundle.payment_inputs.length,
