@@ -87,21 +87,6 @@
           </label>
           <button id="resetButton" type="button" class="secondary">Reset</button>
         </div>
-        <!-- Nordea admin approval. Hidden unless the backend has a pending admin request: this is a
-             rare operator-initiated action, but it must be AUTHORIZED by a share holder, so the
-             decision is shown here in full before it can be approved. -->
-        <section id="adminRequestPanel" class="hidden" aria-labelledby="adminRequestTitle">
-          <div class="panel-heading">
-            <h2 id="adminRequestTitle">Bank admin request</h2>
-            <span id="adminRequestBadge" class="badge badge-warn">Awaiting approval</span>
-          </div>
-          <p class="status-line">Approving this authorizes a change at Nordea. Check every line before you approve.</p>
-          <dl class="metadata-list" id="adminRequestDetails"></dl>
-          <div class="button-row">
-            <button id="approveAdminRequestButton" type="button">Approve bank request</button>
-            <button id="dismissAdminRequestButton" type="button" class="secondary">Not now</button>
-          </div>
-        </section>
         <div id="qrScanner" class="qr-scanner hidden" role="dialog" aria-modal="true" aria-label="Scan QR code">
           <div class="qr-scanner-panel">
             <div class="qr-scanner-header">
@@ -169,6 +154,26 @@
       </section>
 
       <section id="approvalView" class="kernel-frame-shell" aria-label="Payment approval">
+        <!-- Nordea admin approval. Hidden unless a request is pending. It lives at the TOP of the
+             main view, not in Settings: the draft expires in ten minutes, and a control the approver
+             has to be told how to find gets approved in a hurry, under instruction, by someone who
+             decided to say yes before they saw it. Discoverability is part of informed consent. -->
+        <!-- A div with role="region" rather than a nested section: several tests scope their
+             assertions to the approval view with a non-greedy regex that stops at the first closing
+             section tag, so a nested one would silently truncate what they inspect. Identical
+             semantics for assistive tech, without quietly shortening another test's reach. -->
+        <div id="adminRequestPanel" class="hidden" role="region" aria-labelledby="adminRequestTitle">
+          <div class="panel-heading">
+            <h2 id="adminRequestTitle">Bank admin request</h2>
+            <span id="adminRequestBadge" class="badge badge-warn">Awaiting approval</span>
+          </div>
+          <p class="status-line">Approving this authorizes a change at Nordea. Check every line before you approve.</p>
+          <dl class="metadata-list" id="adminRequestDetails"></dl>
+          <div class="button-row">
+            <button id="approveAdminRequestButton" type="button">Approve bank request</button>
+            <button id="dismissAdminRequestButton" type="button" class="secondary">Not now</button>
+          </div>
+        </div>
         <div id="bundleQueue" class="bundle-queue hidden" aria-live="polite">
           <div class="bundle-queue-summary">
             <strong id="bundleQueueTitle">1 bundle pending</strong>
