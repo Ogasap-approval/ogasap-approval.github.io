@@ -14,6 +14,7 @@ const APPROVER_ID_PATTERN = "^[A-Za-z0-9._:-]{3,128}$";
 const DEVICE_ID_PATTERN = "^[A-Za-z0-9._:-]{16,128}$";
 const KEY_ID_PATTERN = "^[A-Za-z0-9._:-]{8,128}$";
 const THRESHOLD_PATTERN = "^[0-9]+-of-[0-9]+$";
+const PRINTABLE_ASCII_PATTERN = "^[\\x20-\\x7e]+$";
 
 function schema(name, body) {
   return {
@@ -63,6 +64,29 @@ const RECENT_APPROVAL_ITEM = {
     device_id: { type: "string", pattern: DEVICE_ID_PATTERN },
     share_index: { type: "integer", enum: [3, 4] },
     key_id: { type: "string", pattern: KEY_ID_PATTERN }
+  }
+};
+
+// The Nordea ADMIN draft carried by GET /api/approval/pending-admin-request.
+// Like PENDING_BUNDLE_ITEM this pins the security-relevant top-level shape and
+// bounds the sizes, and tolerates the rest (additionalProperties): the FULL
+// contract for this object is schemas/nordea_admin_input_v1.schema.json, and it
+// is enforced -- route by route, header by header, body byte by body byte --
+// by validateNordeaAdminSigningInputV1 in core/protocol/envelopes.js before
+// the draft is ever displayed or signed. Restating that envelope here would
+// create a second, weaker copy of it that could drift from the canonical one.
+const PENDING_ADMIN_INPUT = {
+  type: ["object", "null"],
+  additionalProperties: true,
+  required: ["version", "request_id", "method", "path", "signed_headers"],
+  properties: {
+    version: { const: "nordea_admin_input_v1" },
+    request_id: { type: "string", minLength: 8, maxLength: 128, pattern: "^[A-Za-z0-9._:-]+$" },
+    method: { type: "string", enum: ["POST", "PUT", "GET"] },
+    path: { type: "string", minLength: 1, maxLength: 512 },
+    signed_headers: { type: "array", minItems: 3, maxItems: 5 },
+    body_base64url: { type: "string", minLength: 2, maxLength: 350000, pattern: BASE64URL_PATTERN },
+    body_sha256: { type: "string", pattern: HEX64_PATTERN }
   }
 };
 
@@ -143,6 +167,34 @@ export const RESPONSE_SCHEMAS = {
       received_at: { type: "string", format: "date-time" },
       polling_capabilities: { type: "object", additionalProperties: true },
       bank_submission: { type: "object", additionalProperties: true }
+    }
+  }),
+  pending_admin_request_response_v1: schema("pending_admin_request_response_v1", {
+    type: "object",
+    additionalProperties: false,
+    required: ["version", "admin_input"],
+    properties: {
+      version: { const: "pending_admin_request_response_v1" },
+      // null is the "nothing pending" value, and it is REQUIRED to be present:
+      // an absent key would let a renamed/typo'd backend field read as "nothing
+      // to approve" forever instead of failing loudly.
+      admin_input: PENDING_ADMIN_INPUT
+    }
+  }),
+  admin_approval_result_v1: schema("admin_approval_result_v1", {
+    type: "object",
+    additionalProperties: false,
+    required: ["version", "ok", "status", "nordea_runtime", "persisted"],
+    properties: {
+      version: { const: "admin_approval_result_v1" },
+      // A REAL boolean, never the string "false": the admin outcome is rendered
+      // straight from this field, and every non-empty string is truthy.
+      ok: { type: "boolean" },
+      // The bank's HTTP status, or null when the backend refused before calling it.
+      status: { type: ["integer", "null"], minimum: 100, maximum: 599 },
+      nordea_runtime: { type: "object", additionalProperties: true },
+      persisted: { type: "array", maxItems: 32, items: { type: "string", minLength: 1, maxLength: 256, pattern: PRINTABLE_ASCII_PATTERN } },
+      error: { type: "string", minLength: 1, maxLength: 256, pattern: PRINTABLE_ASCII_PATTERN }
     }
   }),
   migration_request_response_v1: schema("migration_request_response_v1", {

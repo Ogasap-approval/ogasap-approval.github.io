@@ -9,7 +9,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "a450ce7ab6ccfd0f594837e1312c8101b2f54e69fd91d6ee376fc92db05f0dbd"
+      "sha256": "942ab9c76ef0aeb14f98ee4eebd4a9048c6e4e1813a836b4a89bbef24f190ef8"
     },
     {
       "path": "kernel.html",
@@ -21,15 +21,19 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "980ea19dd4fe31aa9954dfa064a607c971c1e0bac28bd3c7b3b8ec68c81e39bb"
+      "sha256": "22a0668aed2078d99bf4cf5e32978e4d940c6ef048f38cf60bf9d60d6b1d4e93"
+    },
+    {
+      "path": "src/admin-request.js",
+      "sha256": "a49dd4fde50d2e9fb35672e3b5a941e21ecf1fb5245144ab36bec3c28c6a1f28"
     },
     {
       "path": "src/api-client.js",
-      "sha256": "2e8937dee198b43dcebf92137ea723b3a1259a3fdd9cad37fd5aae018b82bfc2"
+      "sha256": "2d4bd7e0050fcefe135727041a7f4859c1a385bfd693e2d17bb8065d58a442d8"
     },
     {
       "path": "src/app.js",
-      "sha256": "e2c49305c8a8918215cad2752bc8cf791c2ed41e6e7cdaaf3c0c76a4072c505e"
+      "sha256": "2c25a0ce315974660f1d3729b51926863edca71b861d00d8d068b9c65fb54b9e"
     },
     {
       "path": "src/approval-kernel.js",
@@ -81,15 +85,15 @@
     },
     {
       "path": "src/core/protocol/envelopes.js",
-      "sha256": "1ee509e666069c678d670b56b463958d27b912d402f18d7bf6c69c23e01b30c8"
+      "sha256": "11b77abf4f577c434c51a400b97e2a60b384cb6b2cab31b0adf024b2bb166adc"
     },
     {
       "path": "src/core/protocol/release.js",
-      "sha256": "b96bb2acbae2c53872d4966266fe45017978aa4650b82392227e145640ff5118"
+      "sha256": "ef937873f243cf42d6aa70dfc30ad84d4387da4d93936bfcd25df4dad2891ff2"
     },
     {
       "path": "src/core/protocol/signing.js",
-      "sha256": "e33f6188fc66ebb7e3adb89c0608e5924094dbffab0dc0b9484a18822a8e70cb"
+      "sha256": "7767d05281269b56508ca94a4961c9910fc97b916d73ca052935ea0baf9e89fd"
     },
     {
       "path": "src/force-update.js",
@@ -133,7 +137,7 @@
     },
     {
       "path": "src/response-schemas.js",
-      "sha256": "bf9352e5a17466b1c735a75c3d53257896137e94df561e668b054e4aeaa7344b"
+      "sha256": "a40f259843134fb2af8848d8d09d6a3a50fb718ae10a2e92430e20aa5bb1f689"
     },
     {
       "path": "src/sign-task-worker.js",

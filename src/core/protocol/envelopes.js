@@ -1110,6 +1110,775 @@ export async function paddedBankReadSigningDigestV1(input, modulusByteLength, cr
   return emsaPkcs1v15Encode(signingStringBytes, modulusByteLength, cryptoProvider);
 }
 
+// --- Nordea admin drafts (Corporate Access + signing-key lifecycle) ---------
+//
+// These are the ONLY non-payment requests the threshold key ever signs. Before
+// this envelope existed the drafts could only be signed by feeding a raw phone
+// share to a CLI tool — i.e. by exporting share 3 or 4 off a phone, which
+// defeats the ceremony. They are modeled exactly like bank_signing_input_v1
+// (body + digest header) or bank_read_signing_input_v1 (body-less read),
+// restricted to the admin routes, and they carry their own VISIBLE ACTION
+// derived from the signed body so the holder sees what they are authorizing.
+//
+// The highest-blast-radius field here is `authorizer_id`: it nominates the human
+// who receives the approval in the Nordea app. Nominating the wrong id (e.g. a
+// sandbox id in production) hands the decision to the wrong person, so it is
+// surfaced for the holder to check rather than trusted from the caller.
+//
+// Two constraints are pinned here and NOWHERE ELSE in this module, because the
+// payment envelope's validators are shared and must not learn them:
+//   1. WHERE the signature is valid. The signed bytes name an originating host;
+//      a Nordea-looking path signed for an attacker's host is a request this
+//      protocol never makes, so the host value is an allowlist (below), not a
+//      shape test.
+//   2. WHICH authorization variant is being asked for. DECOUPLED and REDIRECT
+//      are different requests carrying different fields; they are modeled
+//      separately so a draft can never be half of each.
+
+// Every admin request shape, keyed by METHOD + PATH. Kept as an explicit table rather than a
+// prefix test: "/corporate/" alone would also match the payment API, so an admin envelope could be
+// used to sign a payment. An id segment is bounded, never a free path.
+//
+// `body` is the WIRE SHAPE the route demands — "json", "form" (Nordea takes the OAuth token
+// exchange as application/x-www-form-urlencoded, not JSON) or "none". It decides how the signed
+// bytes are parsed AND which content-type may be signed beside them; if those two disagree, the
+// parse the holder was shown is not the parse the bank performs.
+const NORDEA_ADMIN_EXACT_ROUTES = Object.freeze([
+  Object.freeze({ action: "corporate_access_start", method: "POST", path: "/corporate/v3/authorize", body: "json" }),
+  Object.freeze({ action: "corporate_access_token", method: "POST", path: "/corporate/v3/authorize/token", body: "form" }),
+  Object.freeze({ action: "signing_key_create", method: "POST", path: "/corporate/v2/keys/sign", body: "json" })
+]);
+
+// The parameterised routes: `${prefix}${id}`, where the id is a bank-issued resource id.
+const NORDEA_ADMIN_ID_ROUTES = Object.freeze([
+  // The step that NOMINATES the human who approves in the Nordea app.
+  Object.freeze({ action: "corporate_access_authorize", method: "PUT", prefix: "/corporate/v3/authorize/", body: "json" }),
+  Object.freeze({ action: "corporate_access_status", method: "GET", prefix: "/corporate/v3/authorize/", body: "none" }),
+  Object.freeze({ action: "signing_key_status", method: "GET", prefix: "/corporate/v2/keys/", body: "none" })
+]);
+
+// Unreserved characters only: no "/" and no "%", so no path segment and no percent-encoded
+// traversal is expressible inside an id.
+const ADMIN_ID_SEGMENT = /^[A-Za-z0-9._~-]{1,128}$/u;
+
+// The id segments that URL machinery REWRITES in transit. "/corporate/v3/authorize/.." normalises
+// to "/corporate/v3" in any conforming URL parser between here and Nordea, so the path that was
+// signed and the path that arrives are different requests — the signature would cover a request
+// nobody saw. The character class above happens to admit both, so exclude them by value.
+function isAdminIdSegmentV1(value) {
+  return typeof value === "string" && value !== "." && value !== ".." && ADMIN_ID_SEGMENT.test(value);
+}
+
+// "token" and "sign" are EXACT routes sitting under the same prefixes as the {id} routes. Treating
+// them as ids would let "GET /corporate/v3/authorize/token" be signed as a status read of a
+// resource named "token" — a different request from the POST token exchange that path really is.
+function isReservedAdminIdSegmentV1(prefix, id) {
+  return NORDEA_ADMIN_EXACT_ROUTES.some((route) => route.path === `${prefix}${id}`);
+}
+
+// Resolution is PATH FIRST, method second. Filtering by method first is the bug this ordering
+// exists to prevent: a GET or PUT on "/corporate/v3/authorize/token" would skip the (POST) exact
+// route and fall through to the parameterised routes, resolving as an {id} request. A path that IS
+// an exact route is only ever that route, and only for that route's method.
+function resolveNordeaAdminRoute(method, path) {
+  if (typeof method !== "string" || typeof path !== "string" || path.length > 512) {
+    return null;
+  }
+  const exact = NORDEA_ADMIN_EXACT_ROUTES.find((route) => route.path === path);
+  if (exact) {
+    return exact.method === method ? exact : null;
+  }
+  for (const route of NORDEA_ADMIN_ID_ROUTES) {
+    if (route.method !== method || !path.startsWith(route.prefix)) {
+      continue;
+    }
+    const id = path.slice(route.prefix.length);
+    if (!isAdminIdSegmentV1(id) || isReservedAdminIdSegmentV1(route.prefix, id)) {
+      // Defense in depth: the exact-route match above already claimed the reserved literals.
+      return null;
+    }
+    return route;
+  }
+  return null;
+}
+
+// The exact Nordea authority this system is built to ask for — nothing wider. These are
+// ALLOWLISTS, not shape patterns: a broad regex would let a compromised backend draft a request for
+// authority nobody ever reviewed (a different scope, a role that signs something else, an
+// authentication type that skips the human) and ask a holder to sign it, where the display looks
+// unremarkable because the display is derived from those same bytes. Extending any of these lists
+// is a deliberate code change, reviewed like any other — that is the point of them.
+const ADMIN_SCOPES = Object.freeze(["PAYMENTS_BROADBAND"]);
+const ADMIN_ROLES = Object.freeze(["SIGNING_PAYMENTS"]);
+const ADMIN_AUTH_TYPES = Object.freeze(["DECOUPLED", "REDIRECT"]);
+const ADMIN_AUTH_METHODS = Object.freeze(["MTA"]);
+
+// WHERE the signature is valid. The signed bytes carry an originating-host header, and the
+// signature is computed over it: whoever holds a signature for host H holds an authorization to
+// speak to H. Accepting any syntactically valid host would let a compromised backend obtain a
+// threshold signature over a Nordea-shaped path addressed to a host it controls — the holder would
+// read a familiar admin action and never see the destination. So the value is pinned to the two
+// Nordea-operated hosts this protocol talks to.
+//
+// ADDING A HOST HERE IS A DELIBERATE CODE CHANGE, reviewed like any other. It is the one place that
+// decides which party a threshold signature can be aimed at; it must never become configuration,
+// and it must never be derived from the draft being signed.
+export const NORDEA_ADMIN_ORIGINATING_HOSTS = Object.freeze([
+  // Nordea's Open Banking production gateway.
+  "open.nordea.com",
+  // The host server/nordea-client.mjs defaults to (NORDEA_ORIGINATING_HOST / the base URL host);
+  // Nordea serves the sandbox and the live Corporate APIs from it.
+  "api.nordeaopenbanking.com"
+]);
+
+// The admin signed-header block, by NAME and POSITION. validateBankSignedHeadersV1 accepts any
+// `x-<vendor>-originating-*` spelling because it guards the shared payment path; the admin routes
+// are only ever spoken to Nordea, so here the names are literals. A header the recipient reads
+// under a different name is a header the holder was shown under the wrong one.
+const NORDEA_ADMIN_HOST_HEADER = "x-nordea-originating-host";
+const NORDEA_ADMIN_DATE_HEADER = "x-nordea-originating-date";
+const NORDEA_ADMIN_READ_HEADER_NAMES = Object.freeze([
+  "(request-target)",
+  NORDEA_ADMIN_HOST_HEADER,
+  NORDEA_ADMIN_DATE_HEADER
+]);
+const NORDEA_ADMIN_BODY_HEADER_NAMES = Object.freeze([
+  ...NORDEA_ADMIN_READ_HEADER_NAMES,
+  "content-type",
+  "digest"
+]);
+
+// The originating-date WIRE FORMAT: the IMF-fixdate that `new Date().toUTCString()` emits in
+// server/nordea-client.mjs, e.g. "Mon, 31 Aug 2026 12:00:00 GMT". This is deliberately narrower
+// than "a date": Date.parse also accepts ISO 8601, informal spellings and non-GMT offsets, none of
+// which the draft builder can produce, so a value that parses but is not this shape means the
+// signer and the sender disagree about the request being signed.
+const NORDEA_ADMIN_IMF_FIXDATE =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/u;
+
+// Shape AND instant. The regex fixes the format; Date.parse then rejects the impossible component
+// values the shape alone admits (day 00, hour 99). The weekday is not cross-checked against the
+// date — no HTTP-date consumer routes on it, and the numeric date is what is bound either way.
+function isNordeaAdminHttpDate(value) {
+  if (typeof value !== "string" || !NORDEA_ADMIN_IMF_FIXDATE.test(value)) {
+    return false;
+  }
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    return false;
+  }
+  // Round-trip against the exact spelling toUTCString() produces. The regex alone still admits
+  // dates the builder can never emit — "31 Feb", hour 24, a weekday that does not match the date —
+  // because Date.parse normalises them. If the signer would accept a date the sender cannot
+  // produce, the two disagree about the request.
+  return new Date(parsed).toUTCString() === value;
+}
+
+
+const ADMIN_ID = /^[A-Za-z0-9._:-]{1,64}$/u;
+// The unit is SECONDS (tools/test-nordea-sandbox-payment-poll.mjs --duration <seconds>). What Nordea
+// actually GRANTS is its own decision, read back from the response; this only bounds what can be asked
+// for, so a nonsense value cannot be signed unnoticed.
+const MAX_ADMIN_DURATION_SECONDS = 315360000; // 10 years
+const MAX_ADMIN_LIST_ENTRIES = 16;
+const MAX_ADMIN_REDIRECT_URI_LENGTH = 512;
+// The DISPLAYED redirect target is the parsed origin, which is bounded separately (and matches
+// nordea_admin_input_v1.schema.json's 255-char bound on visible_admin_action.redirect_uri).
+const MAX_ADMIN_REDIRECT_ORIGIN_LENGTH = 255;
+const MAX_ADMIN_STATE_LENGTH = 256;
+// DEFENSIVE CEILINGS, not Nordea-documented limits: Nordea publishes no OAS for these routes, so
+// there is nothing to check them against. They exist to stop an absurd body being signed unread,
+// not to model the bank. A bound that is too TIGHT is the dangerous direction — it fails closed in
+// the middle of a live flow, on an opaque credential whose length the bank chose — so they are set
+// well above anything Nordea has been observed to issue rather than snugly around it.
+const MAX_ADMIN_FORM_BODY_LENGTH = 32768;
+const MAX_ADMIN_FORM_VALUE_LENGTH = 8192;
+const ADMIN_FORM_CONTENT_TYPE = "application/x-www-form-urlencoded";
+const ADMIN_JSON_CONTENT_TYPE = "application/json";
+
+// The two token exchanges Nordea defines, by their COMPLETE key set (sorted). Neither extra keys
+// nor missing ones are accepted: an unmodeled key in a form body is a parameter the holder was
+// never shown, and the recipient would honor it.
+const ADMIN_TOKEN_GRANTS = Object.freeze({
+  authorization_code: Object.freeze(["code", "grant_type"]),
+  refresh_token: Object.freeze(["grant_type", "refresh_token"])
+});
+
+function assertAdminAllowedValue(name, value, allowed) {
+  if (typeof value !== "string" || !allowed.includes(value)) {
+    throw new RangeError(`${name} must be one of: ${allowed.join(", ")}`);
+  }
+  return value;
+}
+
+// scope/roles are arrays in the Nordea bodies; a lone string is normalised so the holder always
+// sees a list. Duplicates are refused: they cannot mean anything beyond the single entry, and the
+// visible action is compared byte-for-byte against a caller-supplied one.
+function assertAdminAllowedList(name, raw, allowed) {
+  const entries = Array.isArray(raw) ? raw : [raw];
+  if (entries.length < 1 || entries.length > MAX_ADMIN_LIST_ENTRIES) {
+    throw new RangeError(`${name} must contain 1..${MAX_ADMIN_LIST_ENTRIES} entries`);
+  }
+  for (const entry of entries) {
+    assertAdminAllowedValue(`${name} entry`, entry, allowed);
+  }
+  if (new Set(entries).size !== entries.length) {
+    throw new RangeError(`${name} must not repeat an entry`);
+  }
+  return entries;
+}
+
+function assertAdminDuration(value) {
+  if (!Number.isInteger(value) || value <= 0 || value > MAX_ADMIN_DURATION_SECONDS) {
+    throw new RangeError("Nordea admin duration must be a positive integer number of seconds within bounds");
+  }
+  return value;
+}
+
+function assertAdminIdValue(name, value) {
+  assertPattern(name, value, ADMIN_ID);
+  return value;
+}
+
+// An IPv4 host, in the ONE spelling that survives URL parsing: the WHATWG parser normalises every
+// legal IPv4 form ("0x7f.1", "2130706433", "127.1") to dotted decimal, so this single test covers
+// all of them. IPv6 arrives bracketed ("[::1]").
+const ADMIN_IPV4_HOSTNAME = /^\d{1,3}(?:\.\d{1,3}){3}$/u;
+// A plain ASCII domain with at least two labels — the same host shape
+// nordea_admin_input_v1.schema.json pins for the displayed redirect origin.
+const ADMIN_REDIRECT_HOSTNAME = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/u;
+
+// A redirect_uri is DISPLAYED to the holder and then followed by a browser, so it has to be safe to
+// read as much as safe to visit. Returns the PARSED ORIGIN — what a URL parser resolved, not what
+// the caller typed — because that string, and only that string, decides who receives the
+// authorization. A path or query would only add screen for the holder to read past.
+function assertAdminRedirectUri(value) {
+  // Checked before new URL(): the URL parser silently STRIPS tab/CR/LF and tolerates leading and
+  // trailing whitespace, so a parsed URL that looks clean can still have been signed with control
+  // characters in it. Bidi overrides (U+202A-U+202E, U+2066-U+2069) are the other half — they can
+  // make an attacker's host render right-to-left as the bank's. DISPLAY_UNSAFE covers both, plus
+  // the rest of Cc/Cf/surrogates/noncharacters.
+  assertDisplaySafeText("redirect_uri", value, MAX_ADMIN_REDIRECT_URI_LENGTH);
+  // Surrounding whitespace is stripped by the same parser, for the same reason: the value that was
+  // signed and displayed would not be the value that is fetched.
+  if (value.length < 1 || value.trim() !== value) {
+    throw new RangeError("redirect_uri must not be empty or padded with whitespace");
+  }
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new RangeError("redirect_uri must be an absolute URL");
+  }
+  if (url.protocol !== "https:") {
+    throw new RangeError("redirect_uri must use https");
+  }
+  // "https://login.nordea.com@attacker.example/" reads as the bank and resolves to the attacker;
+  // userinfo has no legitimate use in a bank redirect.
+  if (url.username !== "" || url.password !== "") {
+    throw new RangeError("redirect_uri must not carry credentials");
+  }
+  // A fragment is never sent to the server, so it can only ever be display bait: everything after
+  // "#" is invisible to the recipient and fully visible to the holder.
+  if (url.hash !== "") {
+    throw new RangeError("redirect_uri must not carry a fragment");
+  }
+  const hostname = url.hostname;
+  // An IP literal names no organisation. A holder cannot tell "https://13.53.1.2" from the bank's
+  // own address, and no legitimate Nordea callback is addressed to a bare address.
+  if (hostname.startsWith("[") || ADMIN_IPV4_HOSTNAME.test(hostname)) {
+    throw new RangeError("redirect_uri host must be a domain name, not an IP address");
+  }
+  // Homograph defence. new URL() IDNA-encodes a Unicode host, so "nordeа.com" (Cyrillic а) arrives
+  // here as "xn--norde-6cd.com" — it would pass every ASCII check while rendering, in the holder's
+  // browser and in most fonts, as the bank's own domain. Refuse both the encoded and (defensively)
+  // the raw non-ASCII form rather than trying to decide which lookalikes are acceptable.
+  if (hostname.includes("xn--") || !PRINTABLE_ASCII.test(hostname)) {
+    throw new RangeError("redirect_uri host must be a plain ASCII domain (no internationalised or punycode labels)");
+  }
+  if (!ADMIN_REDIRECT_HOSTNAME.test(hostname)) {
+    throw new RangeError("redirect_uri host must be a dotted ASCII domain name");
+  }
+  // url.origin, not the raw string: scheme + host + non-default port, normalised by the parser. What
+  // the holder reads is then exactly what a URL parser resolved out of the signed bytes.
+  const origin = url.origin;
+  if (origin.length < 1 || origin.length > MAX_ADMIN_REDIRECT_ORIGIN_LENGTH) {
+    throw new RangeError(`redirect_uri origin must be at most ${MAX_ADMIN_REDIRECT_ORIGIN_LENGTH} characters`);
+  }
+  return origin;
+}
+
+// The opaque value the bank echoes back on the callback. Never interpreted here — only bounded and
+// constrained to characters that render, since it goes on the holder's screen.
+function assertAdminState(value) {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > MAX_ADMIN_STATE_LENGTH ||
+    !PRINTABLE_ASCII.test(value)
+  ) {
+    throw new RangeError(`state must be 1..${MAX_ADMIN_STATE_LENGTH} printable ASCII characters`);
+  }
+  return value;
+}
+
+// The two authorization VARIANTS, modeled separately because they are two different requests that
+// happen to share a JSON object.
+//
+//   DECOUPLED — the decision is pushed to a NAMED human's Nordea app. It must name that human
+//               (authorizer_id) and how to reach them (authentication_method). No browser is
+//               involved, so redirect_uri/state would be signed and never used — and would show the
+//               holder a callback that never fires. Refused rather than ignored.
+//   REDIRECT  — a browser is sent to redirect_uri and returns with state. This repo's own drafts
+//               (demo/backend/server.mjs, tools/test-nordea-sandbox-payment-poll.mjs) carry exactly
+//               { authentication_type, redirect_uri, state } and NO authentication_method: an
+//               earlier revision closed authentication_method to a required MTA, which made every
+//               legitimate redirect draft in this repo unsignable. Both authentication_method and
+//               authorizer_id stay permitted-but-optional for a bank that sends them; each is
+//               surfaced when present.
+//
+// Anything else — a mixed body, an unmodeled key, a DECOUPLED with no nominee — is refused. Shared
+// by corporate_access_authorize and signing_key_create, whose authorization objects are identical.
+function deriveVisibleAdminAuthorizationV1(name, details) {
+  if (details === null || typeof details !== "object" || Array.isArray(details)) {
+    throw new RangeError(`${name} must be an object`);
+  }
+  // Read the variant FIRST: which keys are even legal depends on it.
+  const authenticationType = assertAdminAllowedValue(
+    `${name}.authentication_type`,
+    details.authentication_type,
+    ADMIN_AUTH_TYPES
+  );
+
+  if (authenticationType === "DECOUPLED") {
+    assertModeledObject(name, details, ["authentication_type", "authentication_method", "authorizer_id"], []);
+    return {
+      authentication_type: authenticationType,
+      authentication_method: assertAdminAllowedValue(
+        `${name}.authentication_method`,
+        details.authentication_method,
+        ADMIN_AUTH_METHODS
+      ),
+      authorizer_id: assertAdminIdValue("authorizer_id", details.authorizer_id)
+    };
+  }
+
+  // REDIRECT refuses authorizer_id. In a redirect authorization the approval comes from whoever
+  // follows the link — nothing consults a nominated id — so displaying one to the holder would
+  // assert a control that does not exist: they would read "approver: <person>" and believe that
+  // person gates it. Showing an inert field is the same failure as showing an unverified one, and
+  // no flow in this repository sends it. A bank that genuinely does is a deliberate code change.
+  assertModeledObject(
+    name,
+    details,
+    ["authentication_type", "redirect_uri"],
+    ["authentication_method", "state"]
+  );
+  return {
+    authentication_type: authenticationType,
+    ...(details.authentication_method === undefined
+      ? {}
+      : {
+        authentication_method: assertAdminAllowedValue(
+          `${name}.authentication_method`,
+          details.authentication_method,
+          ADMIN_AUTH_METHODS
+        )
+      }),
+    ...(details.authorizer_id === undefined
+      ? {}
+      : { authorizer_id: assertAdminIdValue("authorizer_id", details.authorizer_id) }),
+    redirect_uri: assertAdminRedirectUri(details.redirect_uri),
+    ...(details.state === undefined ? {} : { state: assertAdminState(details.state) })
+  };
+}
+
+// Same fatal UTF-8 + strict JSON discipline as parseBankBodyV1: reject non-UTF-8 rather than
+// silently U+FFFD-replacing it, so what the holder is shown cannot diverge from the bytes Nordea
+// parses.
+function parseAdminJsonBodyV1(bodyBytes) {
+  let body;
+  try {
+    body = parseStrictJson(new TextDecoder("utf-8", { fatal: true }).decode(bodyBytes));
+  } catch (error) {
+    throw new RangeError(`Nordea admin body must be JSON: ${error.message}`);
+  }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    throw new RangeError("Nordea admin body must be a JSON object");
+  }
+  return body;
+}
+
+// The canonical form serialization: URLSearchParams, keys sorted — byte-for-byte what
+// server/nordea-client.mjs formUrlEncodedSorted() emits (and what tools/test-nordea-sandbox-payment-poll.mjs
+// builds). Sorting by code unit rather than locale: the modeled keys are ASCII, and a locale-dependent
+// order in a signature check would be a machine-dependent one.
+function canonicalAdminFormTextV1(entries) {
+  const canonical = new URLSearchParams();
+  for (const [key, value] of [...entries].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))) {
+    canonical.append(key, value);
+  }
+  return canonical.toString();
+}
+
+// The token exchange is the ONE admin route whose body is a form, and the one whose body is a
+// bearer secret. Both facts are load-bearing: parsing it as JSON (as this envelope originally did)
+// means the real draft can never be signed at all, and surfacing its values would put an
+// access-granting credential on a screen and into every comparison and log that touches the
+// visible action.
+function parseAdminFormBodyV1(bodyBytes) {
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bodyBytes);
+  } catch (error) {
+    throw new RangeError(`Nordea admin form body must be UTF-8: ${error.message}`);
+  }
+  if (text.length < 1 || text.length > MAX_ADMIN_FORM_BODY_LENGTH) {
+    throw new RangeError("Nordea admin form body must be bounded and non-empty");
+  }
+  // URLSearchParams DROPS a leading "?" (it parses a query string, not a body). A recipient reading
+  // the same bytes as a form body sees a parameter literally named "?grant_type" instead — so the
+  // two parses disagree, which is exactly what must never happen between the display and the bank.
+  // (The canonicality rule below also catches this; it is kept for the specific error.)
+  if (text.startsWith("?")) {
+    throw new RangeError("Nordea admin form body must not begin with \"?\"");
+  }
+  const entries = [...new URLSearchParams(text).entries()];
+  // PARSE-AND-RESERIALIZE EQUALITY. One rule in place of a list of them: the signed bytes must be
+  // exactly the canonical encoding of the parameters this code just read out of them. Every way a
+  // form body can be read two ways — ";" as a separator, "+" versus "%20", empty pairs, a stray
+  // trailing "&", a noncanonical percent-encoding of an unreserved character, key order — produces
+  // a reserialization that differs from the original, and is refused here. What the holder is shown
+  // is then derived from a parse that has no second reading left in it.
+  if (canonicalAdminFormTextV1(entries) !== text) {
+    throw new RangeError(
+      "Nordea admin form body must be the canonical sorted url-encoded serialization of its parameters"
+    );
+  }
+  const params = new URLSearchParams(entries);
+  const grantType = params.get("grant_type");
+  const expectedKeys = typeof grantType === "string" && hasOwn(ADMIN_TOKEN_GRANTS, grantType)
+    ? ADMIN_TOKEN_GRANTS[grantType]
+    : null;
+  if (expectedKeys === null) {
+    throw new RangeError(`Nordea admin grant_type must be one of: ${Object.keys(ADMIN_TOKEN_GRANTS).join(", ")}`);
+  }
+  // Sorted comparison of the FULL key list (not a Set) also rejects a repeated key, which would
+  // leave the recipient free to pick a different occurrence than the one read here.
+  const keys = entries.map(([key]) => key).sort();
+  if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
+    throw new RangeError(`a ${grantType} exchange must carry exactly: ${expectedKeys.join(", ")}`);
+  }
+  const secretKey = grantType === "refresh_token" ? "refresh_token" : "code";
+  const secret = params.get(secretKey);
+  if (typeof secret !== "string" || secret.length < 1 || secret.length > MAX_ADMIN_FORM_VALUE_LENGTH) {
+    throw new RangeError(`Nordea admin ${secretKey} must be a bounded non-empty value`);
+  }
+  // Deliberately returns only the grant type. The code / refresh_token IS signed (it is part of the
+  // body bytes) but is never returned, displayed or compared.
+  return { grant_type: grantType };
+}
+
+// Strictly derives what an admin request actually asks for, from the SIGNED bytes — never from
+// caller-supplied display fields (the discipline of deriveVisiblePaymentFromBankBodyV1). Body-less
+// status reads carry the id being queried, which is all there is to show.
+export function deriveVisibleAdminActionFromBodyV1(bodyBytes, path, method = "POST") {
+  const route = resolveNordeaAdminRoute(method, path);
+  if (!route) {
+    throw new RangeError("Nordea admin path is not a modeled admin endpoint");
+  }
+  if (route.body === "none") {
+    // A read. Nothing is authorized by it, so the visible action is the query itself.
+    if (bodyBytes?.length) {
+      throw new RangeError("a body-less Nordea admin request must not carry a body");
+    }
+    return { action: route.action, resource_path: path };
+  }
+
+  if (route.body === "form") {
+    // The exchange authorizes no new decision of its own — that decision was made when the access
+    // request was approved — but WHICH exchange it is stays visible: redeeming a one-time code is
+    // not the same as refreshing a session that was approved long ago.
+    const { grant_type: grantType } = parseAdminFormBodyV1(bodyBytes);
+    return { action: route.action, grant_type: grantType };
+  }
+
+  const body = parseAdminJsonBodyV1(bodyBytes);
+
+  if (route.action === "corporate_access_start") {
+    assertModeledObject("corporate access body", body, ["scope", "duration"], ["agreement_number"]);
+    return {
+      action: route.action,
+      scope: assertAdminAllowedList("scope", body.scope, ADMIN_SCOPES),
+      duration_seconds: assertAdminDuration(body.duration),
+      ...(body.agreement_number === undefined
+        ? {}
+        : { agreement_number: assertAdminIdValue("agreement_number", body.agreement_number) })
+    };
+  }
+
+  if (route.action === "corporate_access_authorize") {
+    // THE nomination step: this is where the approver is decided — either a named human (DECOUPLED)
+    // or whoever completes the browser round-trip to redirect_uri (REDIRECT). Both are surfaced, and
+    // authentication_type is always shown, so the holder can see WHICH of the two they are approving
+    // rather than inferring it from which fields happen to be present.
+    return {
+      action: route.action,
+      resource_path: path,
+      ...deriveVisibleAdminAuthorizationV1("authorize body", body)
+    };
+  }
+
+  // signing_key_create.
+  assertModeledObject("signing key body", body, ["key_details", "authorization_details"], []);
+  assertModeledObject("key_details", body.key_details, ["roles", "duration"], []);
+  return {
+    action: route.action,
+    roles: assertAdminAllowedList("roles", body.key_details.roles, ADMIN_ROLES),
+    duration_seconds: assertAdminDuration(body.key_details.duration),
+    ...deriveVisibleAdminAuthorizationV1("authorization_details", body.authorization_details)
+  };
+}
+
+// The admin signed-header block. Deliberately NOT validateBankSignedHeadersV1 /
+// validateBankReadSignedHeadersV1: those guard the shared payment path and must keep accepting any
+// vendor's originating-header spelling and any host, because they are the generic bank envelope.
+// The admin routes are spoken to Nordea and to nobody else, so here everything is pinned —
+//
+//   * the header NAMES, by position: (request-target), x-nordea-originating-host,
+//     x-nordea-originating-date, and for a body route content-type, digest. No duplicate check is
+//     needed: five distinct literals in five fixed positions cannot repeat.
+//   * the HOST VALUE, to NORDEA_ADMIN_ORIGINATING_HOSTS. This is the fix for the real hole: without
+//     it, a Nordea-looking path signed for "attacker.example" produced a valid threshold signature
+//     scoped to the attacker's host, and the holder's screen — derived from the body, which is
+//     genuine — showed nothing unusual.
+//   * the DATE VALUE, to the exact IMF-fixdate the draft builder emits
+//     (new Date().toUTCString() in server/nordea-client.mjs). Date.parse alone was too weak: it
+//     accepts ISO 8601 and informal dates, so a value the sender could never transmit could ride
+//     along inside the signature.
+//   * the CONTENT-TYPE, to the one the resolved route's body kind demands — the cross-check that
+//     stops a form body being signed as JSON (or the reverse), i.e. a request whose derived display
+//     came from a parse the recipient will not perform.
+function validateNordeaAdminSignedHeadersV1(headers, route, bodySha256) {
+  const bodyless = route.body === "none";
+  const expectedNames = bodyless ? NORDEA_ADMIN_READ_HEADER_NAMES : NORDEA_ADMIN_BODY_HEADER_NAMES;
+  if (!Array.isArray(headers) || headers.length !== expectedNames.length) {
+    throw new RangeError(`Nordea admin signed_headers must contain exactly ${expectedNames.length} headers`);
+  }
+  const expectedContentType = route.body === "form" ? ADMIN_FORM_CONTENT_TYPE : ADMIN_JSON_CONTENT_TYPE;
+  const expectedDigest = bodyless ? null : `SHA-256=${hexToBase64(bodySha256)}`;
+
+  return headers.map((header, index) => {
+    assertModeledObject("Nordea admin signed header", header, ["name", "value"], []);
+    const { name, value } = header;
+    const expectedName = expectedNames[index];
+    if (name !== expectedName) {
+      throw new RangeError(`Nordea admin signed header ${index + 1} must be ${expectedName}`);
+    }
+    if (name === "(request-target)") {
+      if (value !== "") {
+        throw new RangeError("(request-target) signed header value must be empty");
+      }
+      return { name, value };
+    }
+    assertPrintableHeaderValue(`signed header ${name}`, value);
+    if (name === NORDEA_ADMIN_HOST_HEADER && !NORDEA_ADMIN_ORIGINATING_HOSTS.includes(value)) {
+      throw new RangeError(
+        `${NORDEA_ADMIN_HOST_HEADER} must be one of: ${NORDEA_ADMIN_ORIGINATING_HOSTS.join(", ")}`
+      );
+    }
+    if (name === NORDEA_ADMIN_DATE_HEADER && !isNordeaAdminHttpDate(value)) {
+      throw new RangeError(
+        `${NORDEA_ADMIN_DATE_HEADER} must be an IMF-fixdate, e.g. "Mon, 31 Aug 2026 12:00:00 GMT"`
+      );
+    }
+    if (name === "content-type" && value !== expectedContentType) {
+      throw new RangeError(`content-type signed header must be ${expectedContentType}`);
+    }
+    if (name === "digest" && value !== expectedDigest) {
+      throw new RangeError("digest signed header must match body_sha256");
+    }
+    return { name, value };
+  });
+}
+
+function assertNordeaAdminInputShapeV1(input) {
+  assertModeledObject(
+    "Nordea admin signing input",
+    input,
+    ["version", "request_id", "method", "path", "signed_headers"],
+    ["body_sha256", "body_base64url", "visible_admin_action"]
+  );
+  if (input.version !== "nordea_admin_input_v1") {
+    throw new RangeError("Nordea admin signing input version must be nordea_admin_input_v1");
+  }
+  assertPattern("request_id", input.request_id, ID_8_128);
+  const route = resolveNordeaAdminRoute(input.method, input.path);
+  if (!route) {
+    throw new RangeError("Nordea admin path is not a modeled admin endpoint");
+  }
+  assertNoLineBreaks("Nordea admin path", input.path, 512);
+
+  if (route.body === "none") {
+    // A body on a read would be signed but never sent — a silent divergence between the signed
+    // bytes and the request. Refuse it rather than ignore it.
+    if (input.body_base64url !== undefined || input.body_sha256 !== undefined) {
+      throw new RangeError("a body-less Nordea admin request must not carry a body");
+    }
+  } else {
+    if (
+      typeof input.body_base64url !== "string" ||
+      input.body_base64url.length < 2 ||
+      input.body_base64url.length > MAX_BODY_BASE64URL_LENGTH ||
+      !BASE64URL.test(input.body_base64url)
+    ) {
+      throw new RangeError("body_base64url must be bounded unpadded base64url");
+    }
+    assertHex64("body_sha256", input.body_sha256);
+  }
+  return route;
+}
+
+// An IMMUTABLE PICTURE of the draft, taken once, before anything is validated or awaited.
+//
+// Validation and signing read the same draft many times: the route comes from method + path, the
+// signing string from method + path + headers, and the visible action from the body and the path
+// again — with an `await` on the body hash in between. Reading the caller's object across that await
+// means a caller (or a getter) can change it mid-flight and hand out a signature over one request
+// with a display describing another. Everything downstream reads this copy instead, so there is
+// exactly one draft in play no matter what happens to the original.
+//
+// Plain JSON values only: getters are invoked exactly once here and never again, and
+// functions/symbols/BigInt — none of which this envelope models — are refused rather than carried.
+//
+// Object copies are given a NULL PROTOTYPE. That is not cosmetic: assigning to `copy["__proto__"]`
+// on an ordinary object runs Object.prototype's __proto__ SETTER, which re-parents the copy and
+// erases the key, so an input carrying an own enumerable "__proto__" field used to be silently
+// swallowed instead of rejected as unmodeled. On a null-prototype target there is no inherited
+// setter, so the key is copied as an own DATA property and the ordinary unmodeled-field checks
+// (assertModeledObject downstream, stableStringify for visible_admin_action) see it and refuse it.
+// Both of those work on null-prototype objects: they read own keys via Object.keys /
+// Object.prototype.hasOwnProperty.call, and stableStringify accepts a null prototype explicitly.
+const MAX_ADMIN_SNAPSHOT_DEPTH = 8;
+// Canonical array index, i.e. exactly what JSON can express as an array position.
+const ADMIN_ARRAY_INDEX = /^(?:0|[1-9][0-9]*)$/u;
+
+function snapshotAdminValueV1(value, depth) {
+  if (depth > MAX_ADMIN_SNAPSHOT_DEPTH) {
+    // Also the cycle guard: a self-referencing draft cannot recurse forever.
+    throw new RangeError("Nordea admin signing input is nested too deeply");
+  }
+  if (value === null) {
+    return null;
+  }
+  const type = typeof value;
+  if (type === "function" || type === "symbol" || type === "bigint") {
+    throw new RangeError(`Nordea admin signing input must not contain a ${type}`);
+  }
+  if (type !== "object") {
+    return value;
+  }
+  // Symbol-keyed properties are invisible to Object.keys and to every JSON serializer: they would
+  // ride through the copy unexamined and unmodeled. Refuse them wherever they appear.
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    throw new RangeError("Nordea admin signing input must not carry symbol-keyed properties");
+  }
+  if (Array.isArray(value)) {
+    // An array is its indices and nothing else. Own enumerable properties beyond them are dropped
+    // by every array serializer (so they would never reach the recipient) and holes are not JSON
+    // at all — and a hole in signed_headers would skip that header's name check, because .map
+    // skips holes. Requiring exactly `length` own enumerable index keys rejects both.
+    const keys = Object.keys(value);
+    for (const key of keys) {
+      if (!ADMIN_ARRAY_INDEX.test(key) || Number(key) >= value.length) {
+        throw new RangeError(`Nordea admin signing input array has unmodeled property "${key}"`);
+      }
+    }
+    if (keys.length !== value.length) {
+      throw new RangeError("Nordea admin signing input array must not be sparse");
+    }
+    const copy = [];
+    for (let index = 0; index < value.length; index += 1) {
+      copy.push(snapshotAdminValueV1(value[index], depth + 1));
+    }
+    return copy;
+  }
+  const copy = Object.create(null);
+  for (const key of Object.keys(value)) {
+    // defineProperty, not assignment: a plain data property, never a setter invocation, whatever
+    // the key is named.
+    Object.defineProperty(copy, key, {
+      value: snapshotAdminValueV1(value[key], depth + 1),
+      writable: true,
+      enumerable: true,
+      configurable: true
+    });
+  }
+  return copy;
+}
+
+function snapshotNordeaAdminInputV1(input) {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new RangeError("Nordea admin signing input must be an object");
+  }
+  return snapshotAdminValueV1(input, 0);
+}
+
+function buildNordeaAdminSigningStringV1(method, path, headers) {
+  return headers.map(({ name, value }) => {
+    if (name === "(request-target)") {
+      return `(request-target): ${method.toLowerCase()} ${path}`;
+    }
+    return `${name}: ${value}`;
+  }).join("\n");
+}
+
+export function nordeaAdminHttpSigningStringV1(input) {
+  // Snapshot first, even here: this function is synchronous, but a getter on the caller's object
+  // could still return one path to the route resolver and another to the signing string.
+  const draft = snapshotNordeaAdminInputV1(input);
+  const route = assertNordeaAdminInputShapeV1(draft);
+  const headers = validateNordeaAdminSignedHeadersV1(draft.signed_headers, route, draft.body_sha256);
+  return buildNordeaAdminSigningStringV1(draft.method, draft.path, headers);
+}
+
+// Full validation: any body must hash to body_sha256, and any visible_admin_action the caller
+// supplied must EQUAL the one derived from those same signed bytes. A display that disagrees with
+// the bytes is refused, never preferred.
+export async function validateNordeaAdminSigningInputV1(input, cryptoProvider = globalThis.crypto) {
+  // FIRST statement, before any validation and before any await: from here on the caller's object is
+  // never read again, so the signing string and the visible action describe the same request even if
+  // the original is mutated while the body hash is in flight.
+  const draft = snapshotNordeaAdminInputV1(input);
+  const route = assertNordeaAdminInputShapeV1(draft);
+  const headers = validateNordeaAdminSignedHeadersV1(draft.signed_headers, route, draft.body_sha256);
+  const signingString = buildNordeaAdminSigningStringV1(draft.method, draft.path, headers);
+  let bodyBytes = new Uint8Array(0);
+  if (route.body !== "none") {
+    bodyBytes = base64urlToBytes(draft.body_base64url);
+    const actualBodySha256 = await sha256Hex(bodyBytes, cryptoProvider);
+    if (actualBodySha256 !== draft.body_sha256) {
+      throw new RangeError("body_sha256 does not match body_base64url");
+    }
+  }
+  const derived = deriveVisibleAdminActionFromBodyV1(bodyBytes, draft.path, draft.method);
+  if (draft.visible_admin_action !== undefined) {
+    if (stableStringify(draft.visible_admin_action) !== stableStringify(derived)) {
+      throw new RangeError("visible_admin_action does not match the signed body");
+    }
+  }
+  return {
+    signingString,
+    signingStringBytes: utf8Encode(signingString),
+    visibleAdminAction: derived
+  };
+}
+
+export async function paddedNordeaAdminDigestV1(input, modulusByteLength, cryptoProvider = globalThis.crypto) {
+  const { signingStringBytes } = await validateNordeaAdminSigningInputV1(input, cryptoProvider);
+  return emsaPkcs1v15Encode(signingStringBytes, modulusByteLength, cryptoProvider);
+}
+
 export function validatePollingCapabilityPackageV1(pkg) {
   if (pkg === undefined || pkg === null) {
     return null;

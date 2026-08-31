@@ -1,13 +1,17 @@
 import {
   enrollApprovalCredential,
+  fetchPendingAdminRequest,
   fetchPendingBundles,
   fetchRecentApprovals,
   pollMigration,
-  requestMigration
+  requestMigration,
+  submitAdminApproval
 } from "./api-client.js";
 import { decodeEncryptedBackupQrV1, encryptBackupQrV1, validateEncryptedBackupQrV1 } from "./backup-recovery.js";
 import { utf8Decode } from "./core/crypto/bytes.js";
-import { decodePhoneSharePackageV1 } from "./core/protocol/signing.js";
+import { decodePhoneSharePackageV1, signNordeaAdminInputV1 } from "./core/protocol/signing.js";
+import { validateNordeaAdminSigningInputV1 } from "./core/protocol/envelopes.js";
+import { createAdminRequestController } from "./admin-request.js";
 import {
   createMultipartReassembler,
   MULTIPART_PREFIX
@@ -112,7 +116,12 @@ const ids = [
   "activityDetailSummary",
   "activityDetailRows",
   "activityDetailTableWrap",
-  "activityDetailClose"
+  "activityDetailClose",
+  "adminRequestPanel",
+  "adminRequestBadge",
+  "adminRequestDetails",
+  "approveAdminRequestButton",
+  "dismissAdminRequestButton"
 ];
 const els = Object.fromEntries(ids.map((id) => [id, document.querySelector(`#${id}`)]));
 const state = {
@@ -280,6 +289,8 @@ function lockPrfSession(message = "App locked") {
   state.lastApprovalResult = null;
   state.recentApprovals = [];
   state.selectedApprovalId = "";
+  // A pending bank-admin request must not survive a lock: it was fetched for an unlocked device.
+  adminRequests.clear();
   stopQrScanner();
   renderEnrollment();
   renderRecentApprovals();
@@ -1137,6 +1148,11 @@ async function enrollFromPackage(pkg) {
     throw new Error("WebAuthn is required on this browser");
   }
 
+  // Enrolling REPLACES the signing context, and the controls stay reachable while already enrolled.
+  // Invalidate here, before any await: a request fetched under the previous share package must not
+  // remain displayed or become signable under the new one, and an approval already in flight under
+  // the old package must be abandoned rather than completed.
+  adminRequests.clear();
   validateEnrollmentPackage(pkg);
   const credential = await createApprovalCredential({
     approverId: pkg.approver_id,
@@ -1180,6 +1196,7 @@ async function enrollFromPackage(pkg) {
     });
   }
   pollPendingBundles();
+  refreshPendingAdminRequest().catch(() => {});
 }
 
 function storableCredentialRecord(credential, prfWrap) {
@@ -1362,6 +1379,10 @@ async function saveBackendFromSettings() {
   await saveBackendOrigin(origin, storageOptions);
   state.backendOrigin = origin;
   state.backendOriginRequiresPrfUnlock = Boolean(storageOptions.prfWrapKey);
+  // Different backend, different trust context: anything fetched from the previous one is discarded
+  // rather than left approvable against the new one.
+  adminRequests.clear();
+  renderAdminRequest();
   renderEnrollment();
   setStatus("Backend saved");
   if (state.phoneSharePackage && state.webauthnCredential) {
@@ -1746,6 +1767,10 @@ async function resetEnrollment() {
     return;
   }
 
+  // Invalidate at the moment the transition commits, ahead of the asynchronous authorization and
+  // storage deletion below. Clearing only after those awaits leaves a window in which an approval
+  // can still complete against a context the user has already torn down.
+  adminRequests.clear();
   clearResetArming();
   await authorizeEnrollmentReset();
   clearPollTimer();
@@ -1759,6 +1784,7 @@ async function resetEnrollment() {
   state.lastApprovalResult = null;
   state.recentApprovals = [];
   state.selectedApprovalId = "";
+  adminRequests.clear();
   state.pendingQrPackage = null;
   state.qrEnrollPending = false;
   state.shareStorageRequiresPrfUnlock = false;
@@ -1791,7 +1817,177 @@ function schedulePendingBundlePoll(delay = POLL_INTERVAL_MS) {
   }
   state.pollTimer = setTimeout(() => {
     pollPendingBundles();
+    // Admin requests are created by an operator at an arbitrary moment; fetching them only right
+    // after enrollment meant a request raised while the app was already open would never appear.
+    refreshPendingAdminRequest().catch(() => {});
   }, delay);
+}
+
+// --- Nordea admin approval ---------------------------------------------------
+//
+// A rare, operator-initiated action that nonetheless needs a share holder's signature. Everything
+// the request authorizes is rendered from `visible_admin_action`, which the protocol derives from
+// the SIGNED bytes — so what is shown here is what gets signed, not what the backend claims.
+
+const ADMIN_ACTION_LABELS = Object.freeze({
+  corporate_access_start: "Request bank access",
+  corporate_access_authorize: "Authorize bank access",
+  corporate_access_status: "Check bank access status",
+  corporate_access_token: "Exchange bank access token",
+  signing_key_create: "Create bank signing key",
+  signing_key_status: "Check signing key status"
+});
+
+// The headline must match the variant, not just the endpoint. Under DECOUPLED a named human is
+// nominated to approve in the Nordea app; under REDIRECT nobody is nominated at all — approval comes
+// from whoever follows the link. Labelling both "Nominate approver" told the holder a specific
+// person gated the request when, for a redirect, none does. A false headline is the same failure as
+// a false detail, and it is read first.
+function adminActionLabel(action) {
+  const base = ADMIN_ACTION_LABELS[action?.action] ?? action?.action ?? "-";
+  if (action?.authentication_type === "DECOUPLED" && action?.authorizer_id) {
+    return `${base} (approver nominated)`;
+  }
+  if (action?.authentication_type === "REDIRECT") {
+    return `${base} (approved via redirect link)`;
+  }
+  return base;
+}
+
+function durationText(seconds) {
+  if (!Number.isInteger(seconds)) return "-";
+  const days = Math.round(seconds / 86400);
+  if (days >= 365) {
+    const years = (days / 365).toFixed(days % 365 === 0 ? 0 : 1);
+    return `${seconds.toLocaleString()} s (~${years} year${years === "1" ? "" : "s"})`;
+  }
+  if (days >= 1) return `${seconds.toLocaleString()} s (~${days} day${days === 1 ? "" : "s"})`;
+  return `${seconds.toLocaleString()} s`;
+}
+
+// Labels for the fields we know about, in the order they should be read. `authorizer_id` comes
+// first among the details deliberately: naming the wrong person hands the bank decision to someone
+// who should not have it, and it is the field least likely to be noticed otherwise.
+const ADMIN_FIELD_LABELS = Object.freeze({
+  authorizer_id: "Approver nominated",
+  grant_type: "Grant",
+  duration_seconds: "Valid for",
+  scope: "Scope",
+  roles: "Roles",
+  authentication_type: "Approval type",
+  authentication_method: "Approval method",
+  redirect_uri: "Redirect to",
+  state: "State",
+  agreement_number: "Agreement",
+  resource_path: "Resource"
+});
+
+function adminFieldText(key, value) {
+  if (key === "duration_seconds") return durationText(value);
+  if (Array.isArray(value)) return value.join(", ");
+  return String(value);
+}
+
+// Renders EVERY field of the derived action, not a hand-maintained subset. A field that is part of
+// what the holder authorizes but has no row is invisible consent — the same failure as showing an
+// unverified action, one level down. Unknown keys fall back to their raw name so a protocol
+// addition surfaces as something odd to ask about rather than as nothing at all.
+function adminDetailRows(action) {
+  const rows = [["Action", adminActionLabel(action)]];
+  if (!action || typeof action !== "object") return rows;
+  const keys = Object.keys(action).filter((key) => key !== "action");
+  const known = Object.keys(ADMIN_FIELD_LABELS).filter((key) => keys.includes(key));
+  const unknown = keys.filter((key) => !(key in ADMIN_FIELD_LABELS));
+  for (const key of [...known, ...unknown]) {
+    const value = action[key];
+    if (value === undefined || value === null || value === "") continue;
+    rows.push([ADMIN_FIELD_LABELS[key] ?? key, adminFieldText(key, value)]);
+  }
+  return rows;
+}
+
+function renderAdminRequest() {
+  const snap = adminRequests.snapshot();
+  els.adminRequestPanel?.classList.toggle("hidden", !snap.visible);
+  if (!snap.visible || !els.adminRequestDetails) return;
+  els.adminRequestDetails.replaceChildren();
+
+  // Approvable only when the controller derived a meaning. A live button beside an empty panel is
+  // how a holder ends up signing something they were shown nothing about.
+  els.adminRequestBadge.textContent = snap.canApprove ? "Awaiting approval" : "Cannot verify";
+  els.adminRequestBadge.className = "badge badge-warn";
+  els.approveAdminRequestButton.disabled = !snap.canApprove;
+
+  const rows = snap.canApprove
+    ? adminDetailRows(snap.action)
+    : [["Refused", snap.error || "This request could not be verified and cannot be approved."]];
+  for (const [label, value] of rows) {
+    const wrap = document.createElement("div");
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.textContent = value;
+    wrap.append(dt, dd);
+    els.adminRequestDetails.append(wrap);
+  }
+}
+
+// Ordering lives in admin-request.js, tested in test/pwa-admin-request.test.mjs. app.js only
+// renders, so a stale fetch or an overlapping refresh has nowhere here to go wrong.
+const adminRequests = createAdminRequestController({
+  fetchPendingAdminRequest: () => fetchPendingAdminRequest(state.phoneSharePackage, state.backendOrigin),
+  validateAdminInput: (input) => validateNordeaAdminSigningInputV1(input)
+});
+
+async function refreshPendingAdminRequest() {
+  if (!state.phoneSharePackage || !state.backendOrigin) {
+    adminRequests.clear();
+    renderAdminRequest();
+    return;
+  }
+  await adminRequests.refresh();
+  renderAdminRequest();
+}
+
+async function approvePendingAdminRequest() {
+  // Capture the signing context ONCE, here. Reading state.phoneSharePackage / state.backendOrigin
+  // after an await would let a share signed for one backend be submitted to another if the origin
+  // changed mid-signature; the controller's epoch check then refuses the submission outright.
+  const context = Object.freeze({
+    phoneSharePackage: state.phoneSharePackage,
+    backendOrigin: state.backendOrigin,
+    shareIndex: decodePhoneSharePackageV1(state.phoneSharePackage).shareIndex
+  });
+  els.approveAdminRequestButton.disabled = true;
+  try {
+    const outcome = await adminRequests.approve({
+      context,
+      sign: async (input, _action, ctx) => signNordeaAdminInputV1(input, ctx.phoneSharePackage),
+      submit: async (input, signed, ctx) => submitAdminApproval(
+        {
+          request_id: input.request_id,
+          phone_sign_share_base64url: signed.sign_share_base64url,
+          share_index: ctx.shareIndex
+        },
+        ctx.phoneSharePackage,
+        ctx.backendOrigin,
+        { assertStillValid: ctx.isStillValid }
+      )
+    });
+    if (!outcome.ok) {
+      const message = outcome.reason === "context_changed"
+        ? "The bank request was not submitted because the device context changed"
+        : "This bank request could not be verified and was not approved";
+      setStatus(message, "warning");
+      return;
+    }
+    setStatus(outcome.result?.ok ? "Bank request approved" : "Bank request submitted but the bank rejected it",
+      outcome.result?.ok ? "normal" : "warning");
+  } catch (error) {
+    setStatus(`Bank request approval failed: ${error.message}`, "warning");
+  } finally {
+    renderAdminRequest();
+  }
 }
 
 async function pollPendingBundles(options = {}) {
@@ -1935,6 +2131,15 @@ async function init() {
   els.enablePrfButton.addEventListener("click", () => enablePrfStorage().catch((error) => {
     setStatus(error.message, "error");
   }));
+  els.approveAdminRequestButton?.addEventListener("click", () => {
+    approvePendingAdminRequest().catch((error) => setStatus(error.message, "warning"));
+  });
+  els.dismissAdminRequestButton?.addEventListener("click", () => {
+    // Dismissal is per-request and local: the request stays pending server-side, and a NEW one
+    // re-opens the panel. Nothing here can cancel a bank request.
+    adminRequests.dismiss();
+    renderAdminRequest();
+  });
   els.resetButton.addEventListener("click", () => resetEnrollment().catch((error) => {
     setStatus(error.message, "error");
   }));
@@ -2040,6 +2245,7 @@ async function init() {
   sendKernelState();
   showView(routeFromLocation(), { history: "replace" });
   await pollPendingBundles();
+  await refreshPendingAdminRequest().catch(() => {});
 }
 
 init().catch((error) => {

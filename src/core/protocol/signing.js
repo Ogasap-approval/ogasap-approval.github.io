@@ -9,8 +9,10 @@ import {
   canonicalBackendResponseEnvelopeV1,
   canonicalBundleApprovalEnvelopeV1,
   paddedBankReadSigningDigestV1,
-  paddedBankSigningDigestV1
+  paddedBankSigningDigestV1,
+  validateNordeaAdminSigningInputV1
 } from "./envelopes.js";
+import { emsaPkcs1v15Encode } from "../crypto/pkcs1v15.js";
 
 const ID_8_128 = /^[A-Za-z0-9._:-]{8,128}$/u;
 const APPROVER_ID = /^[A-Za-z0-9._:-]{3,128}$/u;
@@ -252,4 +254,47 @@ export async function signBankPaymentInputV1(bankInput, phoneSharePackage, optio
 
 export async function signBankReadInputV1(bankInput, phoneSharePackage, options = {}) {
   return createBankInputSignerV1(phoneSharePackage, options).signReadInput(bankInput);
+}
+
+/**
+ * Signs a Nordea ADMIN draft (Corporate Access or signing-key creation).
+ *
+ * This is the only non-payment request the threshold key signs. It stays a TYPED
+ * envelope for the same reason every other path is: the device must never expose
+ * a generic "sign these bytes" route. The returned visible_admin_action is derived
+ * from the SIGNED body, so the caller displays what was actually signed rather
+ * than what it hoped was signed.
+ */
+export async function signNordeaAdminInputV1(adminInput, phoneSharePackage, options = {}) {
+  assertNoProductionBlindingOverride(options);
+  const share = decodePhoneSharePackageV1(phoneSharePackage);
+  // ONE validation pass, and the digest is computed from the bytes THAT pass returned. Validating a
+  // second time (via paddedNordeaAdminDigestV1) would re-read a caller-held object that can change
+  // between awaits, so the action shown to the holder could describe different bytes than the ones
+  // signed. The returned signingStringBytes are the single source of truth here.
+  const { visibleAdminAction, signingStringBytes } = await validateNordeaAdminSigningInputV1(
+    adminInput,
+    options.cryptoProvider
+  );
+  const paddedDigest = await emsaPkcs1v15Encode(
+    signingStringBytes,
+    modulusByteLength(share.modulus),
+    options.cryptoProvider ?? globalThis.crypto
+  );
+  const signShare = signShareForPaddedDigest({
+    paddedDigest,
+    modulus: share.modulus,
+    shareSi: share.shareSi,
+    shareIndex: share.shareIndex,
+    players: share.players,
+    threshold: share.threshold,
+    blinded: true,
+    cryptoProvider: options.cryptoProvider
+  });
+  return {
+    padded_digest: paddedDigest,
+    visible_admin_action: visibleAdminAction,
+    sign_share: signShare,
+    sign_share_base64url: bytesToBase64url(signShare)
+  };
 }

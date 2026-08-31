@@ -19,6 +19,8 @@ const BUNDLE_APPROVAL_PATH = "/api/approval/bundle-approval";
 const WEBAUTHN_CHALLENGE_NONCE_PATH = "/api/approval/webauthn-challenge-nonce";
 const ENROLL_CREDENTIAL_PATH = "/api/approval/enroll-credential";
 const MIGRATION_REQUEST_PATH = "/api/approval/migration-request";
+const PENDING_ADMIN_REQUEST_PATH = "/api/approval/pending-admin-request";
+const ADMIN_APPROVAL_PATH = "/api/approval/admin-approval";
 const BACKEND_RESPONSE_HEADER = "X-Approval-Backend-Response";
 const EMPTY_BODY = new Uint8Array();
 
@@ -224,6 +226,75 @@ export async function fetchWebauthnChallengeNonce(phoneSharePackage, backendOrig
   });
   validateResponseBody("webauthn_challenge_nonce_response_v1", body);
   return { challengeNonce: body.challenge_nonce, challengeNonceExpiresAt: body.expires_at };
+}
+
+// Nordea ADMIN approval (nordea_admin_input_v1). Operator-created drafts are fetched and approved
+// over the PHONE-authenticated channel, exactly like payment bundles: creating a draft needs the
+// operator's admin token, but AUTHORIZING one needs a share holder. Neither can do it alone.
+export async function fetchPendingAdminRequest(phoneSharePackage, backendOrigin) {
+  const auth = await signedApprovalHeaders({
+    method: "GET",
+    path: PENDING_ADMIN_REQUEST_PATH,
+    phoneSharePackage,
+    backendOrigin
+  });
+  const response = await fetch(apiUrl(PENDING_ADMIN_REQUEST_PATH, {}, backendOrigin), {
+    method: "GET",
+    headers: auth.headers,
+    cache: "no-store"
+  });
+  const body = await verifiedJsonResponse(response, {
+    method: "GET",
+    path: PENDING_ADMIN_REQUEST_PATH,
+    phoneSharePackage,
+    requestServerNonce: auth.serverNonce,
+    requestClientNonce: auth.clientNonce
+  });
+  validateResponseBody("pending_admin_request_response_v1", body);
+  return body.admin_input ?? null;
+}
+
+export class AdminApprovalAbandonedError extends Error {
+  constructor() {
+    super("the signing context changed before the approval was sent");
+    this.name = "AdminApprovalAbandonedError";
+  }
+}
+
+/**
+ * `assertStillValid` is re-checked immediately before the request goes out. Preparing an approval
+ * involves a nonce round-trip and a backend-auth signature, and a lock or backend change during
+ * that window must not still result in a POST.
+ */
+export async function submitAdminApproval(approval, phoneSharePackage, backendOrigin, { assertStillValid } = {}) {
+  const body = JSON.stringify(approval);
+  const bodyBytes = utf8Encode(body);
+  const auth = await signedApprovalHeaders({
+    method: "POST",
+    path: ADMIN_APPROVAL_PATH,
+    bodyBytes,
+    phoneSharePackage,
+    backendOrigin
+  });
+  // LAST controllable moment: everything above (hashing, the nonce, the backend-auth signature) is
+  // preparation, and an invalidation during it must stop the send.
+  if (typeof assertStillValid === "function" && !assertStillValid()) {
+    throw new AdminApprovalAbandonedError();
+  }
+  const response = await fetch(apiUrl(ADMIN_APPROVAL_PATH, {}, backendOrigin), {
+    method: "POST",
+    headers: { ...auth.headers, "Content-Type": "application/json" },
+    body,
+    cache: "no-store"
+  });
+  const result = await verifiedJsonResponse(response, {
+    method: "POST",
+    path: ADMIN_APPROVAL_PATH,
+    phoneSharePackage,
+    requestServerNonce: auth.serverNonce,
+    requestClientNonce: auth.clientNonce
+  });
+  return validateResponseBody("admin_approval_result_v1", result);
 }
 
 export async function enrollApprovalCredential(enrollment, phoneSharePackage, backendOrigin) {

@@ -6,6 +6,6 @@
 // canonical crypto/protocol core, so a phone and a backend pinned to different
 // protocol revisions carry different ids and fail closed with an explicit
 // `protocol_release_rejected` rather than an opaque signature failure.
-export const PROTOCOL_VERSION = "0.4.0";
-export const PROTOCOL_CORE_DIGEST_SHA256 = "b499a290ec760a786de8c03c12132e7db53f96562e5bc486376da73ac6b3e135";
-export const PROTOCOL_RELEASE_ID = "0.4.0+core.b499a290ec760a78";
+export const PROTOCOL_VERSION = "0.5.0";
+export const PROTOCOL_CORE_DIGEST_SHA256 = "fcf94f48786f7354a4db34dde707302bd194d677d35bf7cb6e60958724217207";
+export const PROTOCOL_RELEASE_ID = "0.5.0+core.fcf94f48786f7354";

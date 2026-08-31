@@ -19,7 +19,7 @@ import {
   manifestPathForPrecacheUrl
 } from "./src/sw-integrity.js";
 
-const CACHE_NAME = "approval-approve-prod-v80";
+const CACHE_NAME = "approval-approve-prod-v81";
 const MANIFEST_URL = "./manifest-sha256.json";
 const PRECACHE_URLS = [
   "./",
@@ -29,6 +29,7 @@ const PRECACHE_URLS = [
   "./manifest.webmanifest",
   "./src/styles.css",
   "./src/api-client.js",
+  "./src/admin-request.js",
   "./src/app.js",
   "./src/approval-kernel.js",
   "./src/backup-recovery.js",
