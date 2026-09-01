@@ -1873,15 +1873,19 @@ function adminActionLabel(action) {
   return base;
 }
 
-function durationText(seconds) {
-  if (!Number.isInteger(seconds)) return "-";
-  const days = Math.round(seconds / 86400);
+// MINUTES. Nordea's duration field is the one field in this integration measured in minutes, and
+// rendering it as seconds understated every grant by 60x: a two-year request (1,051,200) displayed
+// as "~12 days". The holder read the smaller number and approved it, which is the failure this
+// panel exists to prevent — the bytes were right and the consent was not.
+function durationText(minutes) {
+  if (!Number.isInteger(minutes)) return "-";
+  const days = Math.round(minutes / 1440);
   if (days >= 365) {
     const years = (days / 365).toFixed(days % 365 === 0 ? 0 : 1);
-    return `${seconds.toLocaleString()} s (~${years} year${years === "1" ? "" : "s"})`;
+    return `${minutes.toLocaleString()} min (~${years} year${years === "1" ? "" : "s"})`;
   }
-  if (days >= 1) return `${seconds.toLocaleString()} s (~${days} day${days === 1 ? "" : "s"})`;
-  return `${seconds.toLocaleString()} s`;
+  if (days >= 1) return `${minutes.toLocaleString()} min (~${days} day${days === 1 ? "" : "s"})`;
+  return `${minutes.toLocaleString()} min`;
 }
 
 // Labels for the fields we know about, in the order they should be read. `authorizer_id` comes
@@ -1890,7 +1894,7 @@ function durationText(seconds) {
 const ADMIN_FIELD_LABELS = Object.freeze({
   authorizer_id: "Approver nominated",
   grant_type: "Grant",
-  duration_seconds: "Valid for",
+  duration_minutes: "Valid for",
   scope: "Scope",
   roles: "Roles",
   authentication_type: "Approval type",
@@ -1902,7 +1906,7 @@ const ADMIN_FIELD_LABELS = Object.freeze({
 });
 
 function adminFieldText(key, value) {
-  if (key === "duration_seconds") return durationText(value);
+  if (key === "duration_minutes") return durationText(value);
   if (Array.isArray(value)) return value.join(", ");
   return String(value);
 }

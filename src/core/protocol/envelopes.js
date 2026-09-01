@@ -1279,7 +1279,10 @@ const ADMIN_ID = /^[A-Za-z0-9._:-]{1,64}$/u;
 // The unit is SECONDS (tools/test-nordea-sandbox-payment-poll.mjs --duration <seconds>). What Nordea
 // actually GRANTS is its own decision, read back from the response; this only bounds what can be asked
 // for, so a nonsense value cannot be signed unnoticed.
-const MAX_ADMIN_DURATION_SECONDS = 315360000; // 10 years
+// MINUTES. Nordea's `duration` is minutes, so this bound must be too. It was 315360000,
+// chosen as ten years of SECONDS, which against a minutes value is a ceiling of six
+// hundred years — which is why it did not catch the request for a hundred and twenty.
+const MAX_ADMIN_DURATION_MINUTES = 5256000; // 10 years, in minutes
 const MAX_ADMIN_LIST_ENTRIES = 16;
 const MAX_ADMIN_REDIRECT_URI_LENGTH = 512;
 // The DISPLAYED redirect target is the parsed origin, which is bounded separately (and matches
@@ -1329,8 +1332,8 @@ function assertAdminAllowedList(name, raw, allowed) {
 }
 
 function assertAdminDuration(value) {
-  if (!Number.isInteger(value) || value <= 0 || value > MAX_ADMIN_DURATION_SECONDS) {
-    throw new RangeError("Nordea admin duration must be a positive integer number of seconds within bounds");
+  if (!Number.isInteger(value) || value <= 0 || value > MAX_ADMIN_DURATION_MINUTES) {
+    throw new RangeError("Nordea admin duration must be a positive integer number of minutes within bounds");
   }
   return value;
 }
@@ -1610,7 +1613,7 @@ export function deriveVisibleAdminActionFromBodyV1(bodyBytes, path, method = "PO
     return {
       action: route.action,
       scope: assertAdminAllowedList("scope", body.scope, ADMIN_SCOPES),
-      duration_seconds: assertAdminDuration(body.duration),
+      duration_minutes: assertAdminDuration(body.duration),
       ...(body.agreement_number === undefined
         ? {}
         : { agreement_number: assertAdminIdValue("agreement_number", body.agreement_number) })
@@ -1635,7 +1638,7 @@ export function deriveVisibleAdminActionFromBodyV1(bodyBytes, path, method = "PO
   return {
     action: route.action,
     roles: assertAdminAllowedList("roles", body.key_details.roles, ADMIN_ROLES),
-    duration_seconds: assertAdminDuration(body.key_details.duration),
+    duration_minutes: assertAdminDuration(body.key_details.duration),
     ...deriveVisibleAdminAuthorizationV1("authorization_details", body.authorization_details)
   };
 }
