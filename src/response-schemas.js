@@ -175,6 +175,12 @@ export const RESPONSE_SCHEMAS = {
     required: ["version", "admin_input"],
     properties: {
       version: { const: "pending_admin_request_response_v1" },
+      // WHY nothing is pending, when the service chose not to mint a step. Optional, so a service
+      // still emitting the two-field body stays valid. A shape constraint rather than an enum of
+      // today's reason vocabulary on purpose: this body is SIGNED, so an unrecognised reason would
+      // fail loudly on the phone, and a service that learns a new reason must not break a holder
+      // whose PWA is pinned a version behind.
+      suppression: { type: ["string", "null"], maxLength: 64, pattern: "^[a-z_]+$" },
       // null is the "nothing pending" value, and it is REQUIRED to be present:
       // an absent key would let a renamed/typo'd backend field read as "nothing
       // to approve" forever instead of failing loudly.

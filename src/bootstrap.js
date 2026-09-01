@@ -25,6 +25,7 @@ export const BOOTSTRAP_GRAPH = [
   "src/app.js",
   "src/approval-kernel.js",
   "src/api-client.js",
+  "src/admin-request.js",
   "src/backup-recovery.js",
   "src/bank-signing-batch.js",
   "src/bootstrap.js",

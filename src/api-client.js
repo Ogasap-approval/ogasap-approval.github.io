@@ -251,7 +251,11 @@ export async function fetchPendingAdminRequest(phoneSharePackage, backendOrigin)
     requestClientNonce: auth.clientNonce
   });
   validateResponseBody("pending_admin_request_response_v1", body);
-  return body.admin_input ?? null;
+  // An ENVELOPE, not the bare input. `admin_input: null` alone cannot tell a holder apart from
+  // "nothing to do" and "the service refused to mint one, and here is why" — and the second is the
+  // state this flow deadlocked in: an empty screen with nothing to act on and no way to find out.
+  // Explicit destructuring at the consumer rather than shape-sniffing: this module refuses ambiguity.
+  return { adminInput: body.admin_input ?? null, suppression: body.suppression ?? null };
 }
 
 export class AdminApprovalAbandonedError extends Error {

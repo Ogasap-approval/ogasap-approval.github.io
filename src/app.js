@@ -1829,6 +1829,18 @@ function schedulePendingBundlePoll(delay = POLL_INTERVAL_MS) {
 // the request authorizes is rendered from `visible_admin_action`, which the protocol derives from
 // the SIGNED bytes — so what is shown here is what gets signed, not what the backend claims.
 
+// Why the service declined to ask for anything. An unrecognised reason falls through to its raw name
+// rather than to silence — the same choice adminDetailRows makes for unknown fields, and for the same
+// reason: something odd to ask about beats nothing at all.
+const ADMIN_SUPPRESSION_TEXT = Object.freeze({
+  attempt_ceiling: "This setup has failed repeatedly and has stopped retrying on its own. It needs an operator before it can continue.",
+  cooling_down: "Waiting for your approval in the Nordea ID app. This will pick up again on its own in a couple of minutes.",
+  already_pending: "A request is already in progress on another device or tab.",
+  ready: "Bank access is fully set up. There is nothing to approve.",
+  refresh_token_dead: "The bank consent has lapsed and the setup has to be started again. This needs an operator.",
+  refreshed_server_side: "The access token was renewed automatically. Nothing needed your approval."
+});
+
 const ADMIN_ACTION_LABELS = Object.freeze({
   corporate_access_start: "Request bank access",
   corporate_access_authorize: "Authorize bank access",
@@ -1914,13 +1926,17 @@ function renderAdminRequest() {
 
   // Approvable only when the controller derived a meaning. A live button beside an empty panel is
   // how a holder ends up signing something they were shown nothing about.
-  els.adminRequestBadge.textContent = snap.canApprove ? "Awaiting approval" : "Cannot verify";
+  els.adminRequestBadge.textContent = snap.suppression
+    ? "Nothing to approve"
+    : (snap.canApprove ? "Awaiting approval" : "Cannot verify");
   els.adminRequestBadge.className = "badge badge-warn";
   els.approveAdminRequestButton.disabled = !snap.canApprove;
 
-  const rows = snap.canApprove
-    ? adminDetailRows(snap.action)
-    : [["Refused", snap.error || "This request could not be verified and cannot be approved."]];
+  const rows = snap.suppression
+    ? [["Status", ADMIN_SUPPRESSION_TEXT[snap.suppression] ?? `The service is not asking for anything right now (${snap.suppression}).`]]
+    : (snap.canApprove
+      ? adminDetailRows(snap.action)
+      : [["Refused", snap.error || "This request could not be verified and cannot be approved."]]);
   for (const [label, value] of rows) {
     const wrap = document.createElement("div");
     const dt = document.createElement("dt");
@@ -1960,8 +1976,21 @@ async function approvePendingAdminRequest() {
   });
   els.approveAdminRequestButton.disabled = true;
   try {
-    const outcome = await adminRequests.approve({
+    // ONE gesture, several signatures. Obtaining bank access is six sequential HTTP requests that
+    // cannot be bundled into a single signature — each signs its own request, and steps after the
+    // first sign a URL containing an id only the previous response produces. Six near-identical
+    // prompts is the approval-fatigue failure this panel exists to prevent, so the holder authorizes
+    // the SEQUENCE and every step is rendered as it is signed.
+    //
+    // `accept` is the enumerated set of bank-setup actions. Anything else halts the chain and falls
+    // back to this panel, where a human reads it — a backend cannot walk a holder somewhere new.
+    const outcome = await adminRequests.approveChain({
       context,
+      accept: (action) => Object.hasOwn(ADMIN_ACTION_LABELS, action?.action),
+      onStep: (action, index) => {
+        setStatus(`Step ${index + 1}: ${adminActionLabel(action)}`, "normal");
+        renderAdminRequest();
+      },
       sign: async (input, _action, ctx) => signNordeaAdminInputV1(input, ctx.phoneSharePackage),
       submit: async (input, signed, ctx) => submitAdminApproval(
         {
@@ -1974,15 +2003,25 @@ async function approvePendingAdminRequest() {
         { assertStillValid: ctx.isStillValid }
       )
     });
+    const done = outcome.steps?.length ?? 0;
     if (!outcome.ok) {
-      const message = outcome.reason === "context_changed"
-        ? "The bank request was not submitted because the device context changed"
-        : "This bank request could not be verified and was not approved";
-      setStatus(message, "warning");
+      const message = {
+        context_changed: "Bank setup stopped because the device context changed",
+        outside_authorized_set: "Bank setup stopped: the bank asked for a step you did not approve",
+        deadline: "Bank setup stopped because it was taking too long; approve again to continue",
+        step_limit: "Bank setup stopped after the expected number of steps",
+        not_approvable: "This bank request could not be verified and was not approved"
+      }[outcome.reason] ?? "This bank request could not be verified and was not approved";
+      setStatus(done ? `${message} (${done} step${done === 1 ? "" : "s"} completed)` : message, "warning");
       return;
     }
-    setStatus(outcome.result?.ok ? "Bank request approved" : "Bank request submitted but the bank rejected it",
-      outcome.result?.ok ? "normal" : "warning");
+    // A paused chain is a SUCCESS: the sequence ran as far as it can without the human doing the
+    // out-of-band approval in the Nordea ID app. Say what is waited on, not just that it stopped.
+    const paused = ADMIN_SUPPRESSION_TEXT[outcome.suppression];
+    setStatus(
+      paused ?? (done ? `Bank setup advanced ${done} step${done === 1 ? "" : "s"}` : "Nothing was waiting for approval"),
+      "normal"
+    );
   } catch (error) {
     setStatus(`Bank request approval failed: ${error.message}`, "warning");
   } finally {

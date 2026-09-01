@@ -9,11 +9,11 @@
     },
     {
       "path": "index.html",
-      "sha256": "1004fcfccd3b9416112a4788f5342b94fcb8f05c726661e2832314cfa8f84d63"
+      "sha256": "e0476aa921439b60e8d7815e56ad6a0fbcb8a9783b5ae1063eddba3f103113c2"
     },
     {
       "path": "kernel.html",
-      "sha256": "4c8db42ce2ff19ae384bc7857714e31e3911868f89390d917eaee64539b94755"
+      "sha256": "e9148c9b523418e7b7434c7e4e64b4c76c812a46b09b5fdb4a07154525bcbd67"
     },
     {
       "path": "manifest.webmanifest",
@@ -21,19 +21,19 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "49b6041ad4719adfcd2ec689e95b93ac0ce0381bfcc3b1420860670e3de2ebc1"
+      "sha256": "c287916cf4dd55207532fd34ac113baf50692013ffaa48ea1d3e793380a5747a"
     },
     {
       "path": "src/admin-request.js",
-      "sha256": "a49dd4fde50d2e9fb35672e3b5a941e21ecf1fb5245144ab36bec3c28c6a1f28"
+      "sha256": "be1e6f6577e6a505d223345ad278ac264d4e0862b6b79e6563c5a59539f3151e"
     },
     {
       "path": "src/api-client.js",
-      "sha256": "2d4bd7e0050fcefe135727041a7f4859c1a385bfd693e2d17bb8065d58a442d8"
+      "sha256": "22f2622daa27ea6dc814b3279b51c9bf412874815cb4756e1a2d64f63f83f172"
     },
     {
       "path": "src/app.js",
-      "sha256": "2c25a0ce315974660f1d3729b51926863edca71b861d00d8d068b9c65fb54b9e"
+      "sha256": "6c4cc27bf8c0177b6e2dadba4b2740ca936b5145f5e0e2b875eeb7121b91177a"
     },
     {
       "path": "src/approval-kernel.js",
@@ -53,7 +53,7 @@
     },
     {
       "path": "src/bootstrap.js",
-      "sha256": "edb227fd3d5e6651660c7956a76e4208eccc07d4cfa60aa33ff877b2f15db345"
+      "sha256": "6af5c36aa342afbac595a50ca361110a438651fc4b128939e32ece7184712358"
     },
     {
       "path": "src/core/crypto/bigint.js",
@@ -109,7 +109,7 @@
     },
     {
       "path": "src/integrity.js",
-      "sha256": "4471eaffa8ef905f5f73ac23277c1c1b46524c5643026eb9b887da20436bba28"
+      "sha256": "607b08f75a0e930952d0482ce1d21667bf5efb4264bfb8778b8a78bc7cb0f78e"
     },
     {
       "path": "src/json-schema-validate.js",
@@ -137,7 +137,7 @@
     },
     {
       "path": "src/response-schemas.js",
-      "sha256": "a40f259843134fb2af8848d8d09d6a3a50fb718ae10a2e92430e20aa5bb1f689"
+      "sha256": "b8a9890792bd36948955f41ecdc666a6425224763a5ef2a44045ef41fc159306"
     },
     {
       "path": "src/sign-task-worker.js",
