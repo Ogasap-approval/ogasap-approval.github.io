@@ -370,6 +370,26 @@ section {
   height: 100%;
 }
 
+/* A pending bank-admin request OWNS the approval view. Authorizing a change at the bank and
+   releasing a payment are different decisions, and a payment queue sitting under the panel invites
+   the holder to read one as the other — the panel's whole value is that it is read carefully.
+   Written as "everything that is not the panel" rather than as a list of the three ids currently
+   below it, so anything added to this view later is hidden by default instead of quietly
+   reintroducing the mix. display:none also takes the payment controls out of the tab order, so the
+   guarantee holds for a keyboard, not just for the eye. */
+#approvalView.admin-request-only > :not(#adminRequestPanel) {
+  display: none;
+}
+
+/* Alone in the view the panel defines the whole surface, so it needs the padding the shell drops
+   (the shell is padding-free because it normally frames an iframe that supplies its own) and it has
+   to scroll: a six-field request on a phone puts the approve button below the fold, and the shell
+   clips rather than scrolls. */
+#approvalView.admin-request-only {
+  overflow: auto;
+  padding: 18px;
+}
+
 .bundle-queue {
   display: grid;
   gap: 8px;
@@ -976,6 +996,10 @@ tr:last-child td {
     flex-direction: row;
     flex-wrap: nowrap;
     gap: 8px;
+  }
+
+  #approvalView.admin-request-only {
+    padding: 14px;
   }
 
   .bundle-queue {

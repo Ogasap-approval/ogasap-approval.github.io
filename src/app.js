@@ -295,6 +295,10 @@ function lockPrfSession(message = "App locked") {
   renderEnrollment();
   renderRecentApprovals();
   renderBundleQueue();
+  // The cleared request has to leave the SCREEN, not just the controller. Its panel owns the
+  // approval view while it is up, and an owned view hides the unlock gate — so a stale panel left
+  // behind by a lock would hide the one control that can undo the lock.
+  renderAdminRequest();
   sendKernelState();
   setStatus(message, "warning");
   return true;
@@ -1799,6 +1803,9 @@ async function resetEnrollment() {
   renderEnrollment();
   renderRecentApprovals();
   renderBundleQueue();
+  // Same reason as the lock path: a panel left on screen keeps owning the approval view, and after
+  // a reset nothing polls any more, so nothing would ever come along to take it down.
+  renderAdminRequest();
   sendKernelState();
   setStatus("Enrollment reset");
 }
@@ -1921,6 +1928,17 @@ function adminDetailRows(action) {
 function renderAdminRequest() {
   const snap = adminRequests.snapshot();
   els.adminRequestPanel?.classList.toggle("hidden", !snap.visible);
+  // A request that asks the holder for a DECISION takes the view to itself; the payment queue and
+  // the kernel frame below it are hidden for as long as it is up (the rule lives in styles.css).
+  // Keyed on the derived action, and deliberately not on the other two things it could be keyed on:
+  //   `visible` would also cover the two states that ask for nothing — a suppression notice
+  //     ("nothing to approve; someone has to act in the Nordea ID app") and a request whose meaning
+  //     could not be derived. Neither is a decision, so neither is worth suspending a payment that
+  //     is genuinely waiting, and an unapprovable request that owned the screen would be a way to
+  //     park the payment view indefinitely.
+  //   `canApprove` goes false for the duration of an approval chain, which is precisely when the
+  //     panel must stay in front of everything else.
+  els.approvalView?.classList.toggle("admin-request-only", snap.visible && Boolean(snap.action));
   if (!snap.visible || !els.adminRequestDetails) return;
   els.adminRequestDetails.replaceChildren();
 
