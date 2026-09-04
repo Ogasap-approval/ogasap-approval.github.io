@@ -1842,7 +1842,10 @@ function schedulePendingBundlePoll(delay = POLL_INTERVAL_MS) {
 // reason: something odd to ask about beats nothing at all.
 const ADMIN_SUPPRESSION_TEXT = Object.freeze({
   attempt_ceiling: "This setup has failed repeatedly and has stopped retrying on its own. It needs an operator before it can continue.",
-  cooling_down: "Waiting for your approval in the Nordea ID app. This will pick up again on its own in a couple of minutes.",
+  // Shown for a cooldown on ANY step, so it must not name the Nordea ID app — and must not say the
+  // flow picks up "on its own", which is the same false passivity: a new request does appear by
+  // itself, but it still has to be approved. The step counter beside this line says which step.
+  cooling_down: "The next request is not ready yet. It will appear here in a moment, and you will need to approve it.",
   already_pending: "A request is already in progress on another device or tab.",
   ready: "Bank access is fully set up. There is nothing to approve.",
   refresh_token_dead: "The bank consent has lapsed and the setup has to be started again. This needs an operator.",
@@ -1855,7 +1858,14 @@ const ADMIN_SUPPRESSION_TEXT = Object.freeze({
 const ADMIN_FLOW_STEP_LABELS = Object.freeze({
   need_access: "Requesting bank access",
   need_authorize: "Nominating the approver",
-  need_code: "Waiting for approval in the Nordea ID app",
+  // NOT "waiting". This step needs the holder TWICE, in two different apps, and only the first half
+  // is obvious: they approve in the Nordea ID app, which makes the authorization code exist at the
+  // bank, and then they must come back and approve HERE again — that second approval is the signed
+  // request that actually collects the code. Nothing fetches it on their behalf.
+  //
+  // The old wording described a passive wait, so a holder did exactly what the screen said, came
+  // back, found the same step, and reasonably reported that the app had reset itself.
+  need_code: "Approve in your Nordea ID app, then come back and approve here again",
   need_token: "Exchanging the access token",
   need_signing_key: "Creating the signing key",
   ready: "Setup complete"
