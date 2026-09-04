@@ -1906,6 +1906,26 @@ function renderFlowProgress(progress) {
   }
 }
 
+// What the BUTTON does, which is not always "approve". The label was static markup from before this
+// panel had distinct steps, and on the status step it read "Approve bank request" while the text
+// above it told the holder to go and approve in the Nordea ID app — so the most prominent control on
+// screen described the wrong action, and two holders sat pressing it expecting it to do the thing
+// the sentence beside it had just told them to do elsewhere.
+//
+// The status step in particular APPROVES NOTHING at the bank: it signs a request that asks whether
+// the human has approved yet. Saying so is the difference between an obvious order of operations and
+// a screen that contradicts itself.
+const ADMIN_ACTION_BUTTON_LABELS = Object.freeze({
+  corporate_access_start: "Request bank access",
+  corporate_access_authorize: "Nominate approver",
+  corporate_access_status: "Check if approved",
+  corporate_access_token: "Get access token",
+  signing_key_create: "Create signing key",
+  signing_key_status: "Check signing key"
+});
+
+const DEFAULT_ADMIN_BUTTON_LABEL = "Approve bank request";
+
 const ADMIN_ACTION_LABELS = Object.freeze({
   corporate_access_start: "Request bank access",
   corporate_access_authorize: "Authorize bank access",
@@ -2016,6 +2036,12 @@ function renderAdminRequest() {
     : (snap.canApprove ? "Awaiting approval" : "Cannot verify");
   els.adminRequestBadge.className = "badge badge-warn";
   els.approveAdminRequestButton.disabled = !snap.canApprove;
+  // Keyed on the DERIVED action, like every other line on this panel — never on anything the
+  // backend merely asserts. An unrecognised action falls back to the generic label rather than
+  // guessing a verb for something we could not identify.
+  els.approveAdminRequestButton.textContent = snap.canApprove
+    ? (ADMIN_ACTION_BUTTON_LABELS[snap.action?.action] ?? DEFAULT_ADMIN_BUTTON_LABEL)
+    : DEFAULT_ADMIN_BUTTON_LABEL;
 
   const rows = snap.suppression
     ? [["Status", ADMIN_SUPPRESSION_TEXT[snap.suppression] ?? `The service is not asking for anything right now (${snap.suppression}).`]]
@@ -2102,9 +2128,20 @@ async function approvePendingAdminRequest() {
     }
     // A paused chain is a SUCCESS: the sequence ran as far as it can without the human doing the
     // out-of-band approval in the Nordea ID app. Say what is waited on, not just that it stopped.
+    //
+    // "Advanced N steps" is WRONG for the status check, and wrong in the way that matters. Checking
+    // whether the bank has recorded an approval signs a request and completes a step, so the count
+    // goes up whether or not anything actually moved — and a holder who has not yet approved in the
+    // Nordea ID app was being told his setup progressed. He then waits for something that is waiting
+    // for him. Naming that case is the whole point of this screen.
+    const lastStep = outcome.steps?.[outcome.steps.length - 1]?.action;
+    const onlyChecked = lastStep === "corporate_access_status" && !outcome.suppression;
     const paused = ADMIN_SUPPRESSION_TEXT[outcome.suppression];
     setStatus(
-      paused ?? (done ? `Bank setup advanced ${done} step${done === 1 ? "" : "s"}` : "Nothing was waiting for approval"),
+      paused
+        ?? (onlyChecked
+          ? "Checked with the bank: your approval in the Nordea ID app has not been registered yet. Approve there, then check again."
+          : (done ? `Bank setup advanced ${done} step${done === 1 ? "" : "s"}` : "Nothing was waiting for approval")),
       "normal"
     );
   } catch (error) {

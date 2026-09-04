@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "7a625e73a195c89ad87fbb277983992c5c6ed555eb6d6ed4746de2db8f613333"
+      "sha256": "d8e63084fba0defd7d90526ae110deddda4af821c43772f2311fdfc1056b1820"
     },
     {
       "path": "src/admin-request.js",
@@ -33,7 +33,7 @@
     },
     {
       "path": "src/app.js",
-      "sha256": "78ef091bdad327b10153e0f80e3ee0fb6a2d5593da9440ccd762091088d7f4d4"
+      "sha256": "1813a7df0915c0f5f28003d5c56f24dda7cd57150e98d7f63f479afd4d74576a"
     },
     {
       "path": "src/approval-kernel.js",
