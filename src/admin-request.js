@@ -30,6 +30,19 @@ function own(input) {
   return deepFreeze(structuredClone(input));
 }
 
+// Progress is CONTEXT, not consent — it describes where the sequence has got to, never what is
+// being signed. It is owned like everything else this module holds (a renderer must not be able to
+// rewrite it after display), but a malformed one degrades to "no progress shown" rather than
+// failing the refresh: losing a step counter must never cost the holder a request they could act on.
+function ownProgress(value) {
+  if (!value || typeof value !== "object") return null;
+  try {
+    return own(value);
+  } catch {
+    return null;
+  }
+}
+
 // Identity is the VALIDATED SIGNING STRING — the exact bytes that would be signed. Deriving it from
 // request_id, or even request_id + body, would let a request with the same body but a different
 // originating host or date inherit an earlier dismissal, though its signed bytes differ.
@@ -61,6 +74,10 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
   // on purpose: `current` is the owned request tuple that approve() reads and dismiss() binds to, and
   // a suppression is not a request — it has no input, no action, and nothing signable.
   let suppression = null;
+  // Held OUTSIDE `current` for the same reason `suppression` is, and one more: this is the only
+  // field that must survive `current === null`, because the screen that most needs a step counter
+  // is the one with nothing to approve.
+  let flowProgress = null;
   let dismissedIdentity = "";
   let approving = false;
 
@@ -71,17 +88,18 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
       try {
         fetched = await fetchPendingAdminRequest();
       } catch {
-        if (startedAt === generation) { current = null; error = ""; suppression = null; }
+        if (startedAt === generation) { current = null; error = ""; suppression = null; flowProgress = null; }
         return;
       }
       // An ENVELOPE — { adminInput, suppression } — destructured explicitly rather than sniffed, so a
       // fetcher returning the wrong shape reads as "nothing pending" loudly rather than silently.
       const input = fetched?.adminInput ?? null;
       const why = typeof fetched?.suppression === "string" ? fetched.suppression : null;
+      const progress = ownProgress(fetched?.flowProgress);
       if (!input) {
         // A suppression is only meaningful as the NEWEST answer, so it is written under the same
         // generation guard as everything else.
-        if (startedAt === generation) { current = null; error = ""; suppression = why; }
+        if (startedAt === generation) { current = null; error = ""; suppression = why; flowProgress = progress; }
         return;
       }
 
@@ -96,6 +114,7 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
           current = null;
           error = "This request could not be read and cannot be approved.";
           suppression = null;
+          flowProgress = progress;
         }
         return;
       }
@@ -106,6 +125,7 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
         current = deepFreeze({ input: owned, action: visibleAdminAction, identity: identityFor(signingString, owned) });
         error = "";
         suppression = null;
+        flowProgress = progress;
       } catch (validationError) {
         if (startedAt !== generation) return;
         // Keep it visible with its reason: silently hiding an underivable request leaves an operator
@@ -113,6 +133,7 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
         current = deepFreeze({ input: owned, action: null, identity: identityFor(null, owned) });
         error = validationError.message;
         suppression = null;
+        flowProgress = progress;
       }
     },
 
@@ -123,11 +144,11 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
       if (!current && suppression) {
         const identity = `suppressed:${suppression}`;
         if (identity !== dismissedIdentity) {
-          return { visible: true, action: null, error: "", canApprove: false, suppression, identity };
+          return { visible: true, action: null, error: "", canApprove: false, suppression, identity, flowProgress };
         }
       }
       if (!current || current.identity === dismissedIdentity) {
-        return { visible: false, action: null, error: "", canApprove: false, suppression: null };
+        return { visible: false, action: null, error: "", canApprove: false, suppression: null, flowProgress };
       }
       return {
         visible: true,
@@ -135,7 +156,8 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
         error,
         // Never approvable without a derived meaning, and never while an approval is already running.
         canApprove: Boolean(current.action) && !approving,
-        suppression: null
+        suppression: null,
+        flowProgress
       };
     },
 
@@ -195,6 +217,7 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
       current = null;
       error = "";
       suppression = null;
+      flowProgress = null;
       dismissedIdentity = "";
     },
 

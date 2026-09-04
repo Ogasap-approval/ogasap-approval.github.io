@@ -255,7 +255,15 @@ export async function fetchPendingAdminRequest(phoneSharePackage, backendOrigin)
   // "nothing to do" and "the service refused to mint one, and here is why" — and the second is the
   // state this flow deadlocked in: an empty screen with nothing to act on and no way to find out.
   // Explicit destructuring at the consumer rather than shape-sniffing: this module refuses ambiguity.
-  return { adminInput: body.admin_input ?? null, suppression: body.suppression ?? null };
+  return {
+    adminInput: body.admin_input ?? null,
+    suppression: body.suppression ?? null,
+    // Context, NOT consent: where the multi-step setup has got to. Carried alongside the input
+    // rather than inside it because it describes the sequence, not the bytes being signed — and it
+    // is the one field that must survive `admin_input: null`, since the screen that most needs it
+    // is the one with nothing to approve.
+    flowProgress: body.flow_progress ?? null
+  };
 }
 
 export class AdminApprovalAbandonedError extends Error {

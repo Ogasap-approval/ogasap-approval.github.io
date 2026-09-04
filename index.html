@@ -8,7 +8,7 @@
     <title>Approval</title>
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" href="./src/assets/icon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="./src/styles.css" integrity="sha256-Sjrph3lwCxO1KiB21LbttYBl41pIJieKJI9RwtikuAc=" crossorigin="anonymous">
+    <link rel="stylesheet" href="./src/styles.css" integrity="sha256-KVigKzYq7uEUz2y+SR72A9SVSDuTpJutumecrKikzww=" crossorigin="anonymous">
   </head>
   <body>
     <header class="app-header">
@@ -167,6 +167,12 @@
             <h2 id="adminRequestTitle">Bank admin request</h2>
             <span id="adminRequestBadge" class="badge badge-warn">Awaiting approval</span>
           </div>
+          <!-- Where the multi-step bank setup has got to. Deliberately ABOVE the status line and
+               OUTSIDE #adminRequestDetails: those rows are derived from the bytes being signed, and
+               a step counter the service merely asserts must not sit among them looking equally
+               authorized. Hidden entirely when the service sends no progress, so a backend that
+               predates the field renders exactly as it does today. -->
+          <p class="status-line admin-flow-progress hidden" id="adminRequestProgress" aria-live="polite"></p>
           <p class="status-line">Approving this authorizes a change at Nordea and continues the setup through the steps that follow &mdash; each one is shown here as it is signed. Check every line before you approve.</p>
           <dl class="metadata-list" id="adminRequestDetails"></dl>
           <div class="button-row">

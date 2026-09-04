@@ -181,6 +181,22 @@ export const RESPONSE_SCHEMAS = {
       // fail loudly on the phone, and a service that learns a new reason must not break a holder
       // whose PWA is pinned a version behind.
       suppression: { type: ["string", "null"], maxLength: 64, pattern: "^[a-z_]+$" },
+      // WHERE the setup has got to, so "nothing to approve" can say "step 3 of 5, now waiting on
+      // your Nordea ID app" instead of leaving the holder to guess. Optional for the same reason
+      // `suppression` is: a service that has not learned to send it must stay valid. `state` is a
+      // shape constraint, not an enum of today's flow states, so a backend that gains a step does
+      // not fail validation on a phone pinned a version behind — and `additionalProperties: true`
+      // extends that tolerance one level down.
+      flow_progress: {
+        type: ["object", "null"],
+        additionalProperties: true,
+        required: ["step", "total", "state"],
+        properties: {
+          step: { type: "integer", minimum: 1, maximum: 32 },
+          total: { type: "integer", minimum: 1, maximum: 32 },
+          state: { type: "string", maxLength: 64, pattern: "^[a-z_]+$" }
+        }
+      },
       // null is the "nothing pending" value, and it is REQUIRED to be present:
       // an absent key would let a renamed/typo'd backend field read as "nothing
       // to approve" forever instead of failing loudly.

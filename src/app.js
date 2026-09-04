@@ -119,6 +119,7 @@ const ids = [
   "activityDetailClose",
   "adminRequestPanel",
   "adminRequestBadge",
+  "adminRequestProgress",
   "adminRequestDetails",
   "approveAdminRequestButton",
   "dismissAdminRequestButton"
@@ -1848,6 +1849,53 @@ const ADMIN_SUPPRESSION_TEXT = Object.freeze({
   refreshed_server_side: "The access token was renewed automatically. Nothing needed your approval."
 });
 
+// What each step of the bank setup is actually doing, in the holder's terms. Same fallback rule as
+// ADMIN_SUPPRESSION_TEXT: an unrecognised state shows its raw name rather than blanking the line,
+// so a backend that gains a step surfaces as something odd to ask about rather than as silence.
+const ADMIN_FLOW_STEP_LABELS = Object.freeze({
+  need_access: "Requesting bank access",
+  need_authorize: "Nominating the approver",
+  need_code: "Waiting for approval in the Nordea ID app",
+  need_token: "Exchanging the access token",
+  need_signing_key: "Creating the signing key",
+  ready: "Setup complete"
+});
+
+// "Step 3 of 5 · ●●●○○" — the count first, because the reassurance a holder needs mid-sequence is
+// that there IS an end and this is not it. Dots are decorative and marked as such: a screen reader
+// reading five circles adds nothing to the sentence beside them.
+function renderFlowProgress(progress) {
+  const el = els.adminRequestProgress;
+  if (!el) return;
+  const step = progress?.step;
+  const total = progress?.total;
+  // A service that sends no progress renders exactly as it did before this field existed. Bounds
+  // are re-checked here and not merely at the schema: this line is read as fact by the one person
+  // who can act, and "Step 7 of 5" would undermine every other number on the panel.
+  if (!Number.isInteger(step) || !Number.isInteger(total) || step < 1 || total < 1 || step > total) {
+    el.classList.add("hidden");
+    el.replaceChildren();
+    return;
+  }
+  el.classList.remove("hidden");
+  el.replaceChildren();
+
+  const count = document.createElement("strong");
+  count.textContent = `Step ${step} of ${total}`;
+  const dots = document.createElement("span");
+  dots.className = "flow-dots";
+  dots.setAttribute("aria-hidden", "true");
+  dots.textContent = ` · ${"●".repeat(step)}${"○".repeat(total - step)}`;
+  el.append(count, dots);
+
+  const label = ADMIN_FLOW_STEP_LABELS[progress?.state] ?? progress?.state;
+  if (label) {
+    const detail = document.createElement("span");
+    detail.textContent = ` — ${label}`;
+    el.append(detail);
+  }
+}
+
 const ADMIN_ACTION_LABELS = Object.freeze({
   corporate_access_start: "Request bank access",
   corporate_access_authorize: "Authorize bank access",
@@ -1945,6 +1993,11 @@ function renderAdminRequest() {
   els.approvalView?.classList.toggle("admin-request-only", snap.visible && Boolean(snap.action));
   if (!snap.visible || !els.adminRequestDetails) return;
   els.adminRequestDetails.replaceChildren();
+
+  // Rendered for BOTH panel states. The suppression screen is the one that most needs it: "Nothing
+  // to approve" on its own is what sent a holder looking for a request that had already moved on to
+  // the bank's own app.
+  renderFlowProgress(snap.flowProgress);
 
   // Approvable only when the controller derived a meaning. A live button beside an empty panel is
   // how a holder ends up signing something they were shown nothing about.

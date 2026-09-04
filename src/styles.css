@@ -390,6 +390,31 @@ section {
   padding: 18px;
 }
 
+/* The step counter is the service's account of WHERE the sequence is, not part of what the holder
+   authorizes — so it is styled as a distinct band rather than as another metadata row. Sharing the
+   look of #adminRequestDetails would put an unsigned assertion next to fields derived from the
+   signed bytes, dressed identically, which is the one confusion this panel cannot afford. */
+.admin-flow-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  color: var(--text);
+}
+
+/* Decorative, and aria-hidden in the markup to match. Tabular figures keep the dots from shifting
+   the sentence as the step advances. */
+.admin-flow-progress .flow-dots {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 1px;
+  color: var(--accent-strong);
+}
+
 .bundle-queue {
   display: grid;
   gap: 8px;
