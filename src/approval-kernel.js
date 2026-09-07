@@ -116,31 +116,63 @@ export async function approveReviewedBundle({
  * authorization before executing them. That request names payments by BANK-assigned ids, so its bytes
  * do not exist until the submit has returned, and it cannot be folded into the approval above.
  *
- * ONE gesture, several signatures, the shape the admin chain already uses: the holder is still here and
- * still holds their share, so the round runs straight after the approval rather than asking them to
- * come back. A bundle of up to 200 payments is at most ten requests (20 ids each), all signed in one
- * pass.
+ * THE HOLDER IS NOT ASKED. This runs by itself, in the background, on the ordinary poll. They already
+ * decided: they read the line items, produced a WebAuthn assertion over the bundle metadata, and signed
+ * `bank_request_hashes` — the exact bytes of the POST that created these payments. This round adds
+ * nothing they could weigh. It names payments by bank ids they have never seen and can do nothing but
+ * finish authorizing payments that already exist. A panel here would be a question with no answer to
+ * give, and the only thing it could teach is to tap through approval panels.
  *
  * It is equally the CRASH-RECOVERY path, and that is not a bonus — it is the requirement. If the phone
  * goes away between the submit and this round (app closed, network dropped, tab killed), the result is
  * a created-but-unsigned payment sitting at the bank, which is exactly the live production state this
- * was written for. So this is also safe to call on app open with no approval in progress: it asks what
- * is outstanding and authorizes that.
+ * was written for.
  *
  * Signing is safe to repeat — it authorizes payments the bank has already created and cannot bring a
  * second one into being — so a retry here can never double-pay. The dangerous direction is the other
  * one: not signing at all.
+ *
+ * ---------------------------------------------------------------------------------------------------
+ * WHAT THE PHONE CHECKS BEFORE SIGNING SOMETHING IT WAS NOT ASKED ABOUT
+ * ---------------------------------------------------------------------------------------------------
+ * The load-bearing check is the one signNordeaPaymentSignInputV1 already makes, and it is structural
+ * rather than contextual: `nordea_payment_sign_input_v1` admits exactly one method, one path, and a
+ * body that is nothing but `{"payment_id_list":[...]}` of well-formed bank ids, each request's digest
+ * verified against its own bytes. A signature produced here CANNOT create a payment, alter an amount,
+ * or reach any other endpoint. That is what makes signing without a gesture safe at all, and no amount
+ * of context-checking would substitute for it.
+ *
+ * `recognizeBundle` is the second, weaker check, and it is honestly weaker: the phone has never seen a
+ * bank-assigned payment id (they are minted after the submit), so it cannot relate these bytes to a
+ * bundle on its own. What it CAN do is refuse a bundle it has no record of the holder approving. The
+ * caller supplies that record; the backend supplies both the offer and the history, so this bounds a
+ * BUG or a mix-up between the two holders, not a compromised backend. Say that plainly rather than
+ * dressing it up — the anti-compromise argument is the paragraph above, plus the fact that a payment
+ * can only be sitting at AUTHORIZATION_PARTIAL because a WebAuthn-attested approval put it there.
+ *
+ * It is required, not optional: a caller that cannot say which bundles are the holder's gets no
+ * signature. Fail closed.
  */
 export async function authorizePendingPayments({
   phoneSharePackage,
   backendOrigin,
   integrityManifest,
+  // (bundleId) => boolean — "this holder approved this bundle, and I can show you where I know it from".
+  recognizeBundle,
   signal,
   isCancelled = () => false,
-  onStatus = () => {}
-}) {
+  onStatus = () => {},
+  // Seams, for tests only. Production passes none of these and gets the real modules.
+  fetchPending = fetchPendingPaymentSign,
+  signInput = signNordeaPaymentSignInputV1,
+  submitSigned = submitPaymentSign,
+  assertIntegrity = assertResourcesIntegrity
+} = {}) {
   if (!phoneSharePackage || !backendOrigin) {
     throw new Error("payment authorization requires enrollment");
+  }
+  if (typeof recognizeBundle !== "function") {
+    throw new Error("payment authorization requires a way to recognize the holder's own bundles");
   }
   const assertActive = () => {
     if (signal?.aborted || isCancelled()) {
@@ -148,24 +180,37 @@ export async function authorizePendingPayments({
     }
   };
 
-  const { paymentSignInput, suppression } = await fetchPendingPaymentSign(phoneSharePackage, backendOrigin);
+  const { paymentSignInput, suppression } = await fetchPending(phoneSharePackage, backendOrigin);
   if (!paymentSignInput) {
     return { authorized: false, reason: suppression ?? "nothing_pending" };
   }
   assertActive();
 
+  // Read ONCE, before anything else touches the object, and carried by value from here. The validator
+  // takes its own snapshot for the bytes; this is the routing field, and reading it twice is how a
+  // check and a signature come to disagree.
+  const bundleId = paymentSignInput.bundle_id;
+  if (typeof bundleId !== "string" || bundleId.length === 0) {
+    return { authorized: false, reason: "bundle_not_named" };
+  }
+  if (!recognizeBundle(bundleId)) {
+    // Not an error and not retried differently: the ordinary cause is an authorization waiting on the
+    // OTHER holder, which this phone should neither sign nor complain about.
+    return { authorized: false, reason: "bundle_not_recognised", bundleId };
+  }
+
   // The same integrity gate the payment signatures pass through: never produce a signature from a
   // resource graph that has not just been verified.
-  await assertResourcesIntegrity(integrityManifest, SIGN_WORKER_GRAPH);
-  onStatus("Authorizing payments with the bank");
+  await assertIntegrity(integrityManifest, SIGN_WORKER_GRAPH);
+  onStatus("Finishing the payment authorization with the bank");
 
   // validateNordeaPaymentSignInputV1 runs inside this call and returns the visible action derived from
   // the SIGNED bodies — so what is reported below describes the bytes, not the server's claim.
   const { signatures, visible_payment_authorization: visibleAuthorization } =
-    await signNordeaPaymentSignInputV1(paymentSignInput, phoneSharePackage);
+    await signInput(paymentSignInput, phoneSharePackage);
   assertActive();
 
-  const result = await submitPaymentSign(
+  const result = await submitSigned(
     {
       request_id: paymentSignInput.request_id,
       phone_sign_shares: signatures.map((signature) => signature.sign_share_base64url),
@@ -175,5 +220,5 @@ export async function authorizePendingPayments({
     backendOrigin,
     { assertStillValid: () => !(signal?.aborted || isCancelled()) }
   );
-  return { authorized: true, result, visibleAuthorization };
+  return { authorized: true, result, visibleAuthorization, bundleId };
 }

@@ -10,6 +10,18 @@
 // Everything below serves one property:
 //
 //     the holder signs exactly the request whose derived meaning they were shown, or nothing.
+//
+// THAT PROPERTY IS NOW SATISFIED VACUOUSLY FOR THE BANK-SETUP ACTIONS, and it is worth being precise
+// about why rather than quietly dropping it. The six admin requests are signed without being shown,
+// because none of them takes effect without an explicit approval in the Nordea ID app — a gate
+// outside this stack that this code can neither fake nor bypass. The holder's tap here was never
+// the control for them. What the tap did control was ATTENTION, and spending it on six near-
+// identical prompts, plus one an hour forever, is the approval-fatigue failure this module was
+// written to prevent, arriving by the other door.
+//
+// The invariant that replaces it is narrower and still load-bearing:
+//
+//     nothing outside ADMIN_AUTO_SIGN_ACTIONS is ever signed without being shown.
 
 // Object.freeze is shallow; a frozen parent says nothing about its children, and a renderer could
 // still rewrite a nested authorizer_id after derivation.
@@ -53,6 +65,68 @@ function identityFor(signingString, ownedInput) {
   // Underivable requests never become approvable, so a structural fallback is only used to tell one
   // unapprovable request from another.
   return `unverified:${ownedInput?.request_id ?? ""}|${ownedInput?.method ?? ""}|${ownedInput?.path ?? ""}`;
+}
+
+// WHAT MAY BE SIGNED WITHOUT BEING SHOWN. The service holds the same table (adminAuthority.js) and
+// argues the rule there; this is the phone's own copy, because the phone must not need the service
+// to tell it what it is allowed to do unattended — a backend that could widen this set by saying so
+// would be a backend that could walk a holder past their own consent.
+//
+// Keyed by the DERIVED action: the value computed from the bytes that will actually be signed,
+// never a route or a label the response asserted. Everything absent from it — an action this build
+// does not know, a protocol addition, anything payment-shaped — falls back to the panel and a human.
+export const ADMIN_AUTO_SIGN_ACTIONS = Object.freeze([
+  // Grants nothing on its own; opens the Corporate Access request.
+  "corporate_access_start",
+  // GRANTS bank authority — and the bank will not grant it until the nominated human approves in
+  // the Nordea ID app. That approval is the control, and it is not ours to give.
+  "corporate_access_authorize",
+  // Reads whether they have approved yet.
+  "corporate_access_status",
+  // Spends the code, or the refresh token, for an access token. Authorizes nothing new.
+  "corporate_access_token",
+  // GRANTS a signing key — which the bank issues in AUTHENTICATION_PENDING and which signs nothing
+  // until its SCA completes in the Nordea ID app.
+  "signing_key_create",
+  // Reads whether that SCA completed.
+  "signing_key_status"
+]);
+
+const AUTO_SIGN_SET = new Set(ADMIN_AUTO_SIGN_ACTIONS);
+
+/**
+ * May this action be signed without a person looking at it?
+ *
+ * Takes the DERIVED action object, and reads only its `action`. Anything unrecognised, absent or
+ * malformed is false — the fallback is a human, in every direction.
+ */
+export function mayAutoSignAdminAction(action) {
+  return typeof action?.action === "string" && AUTO_SIGN_SET.has(action.action);
+}
+
+// Does a panel state actually ask the holder to DO something?
+//
+// Kept here rather than in the renderer because it is a rule, not a layout: it decides whether the
+// bank panel takes the whole approval view to itself, hiding the payment queue underneath it.
+//
+// The rule changed with auto-signing, and it had to. It used to be "there is a derived action" —
+// i.e. a bank request waiting for a tap. Those are signed in the background now and flash past in a
+// second or two, so keying the takeover on them would blank the payment queue at random on behalf
+// of a process that wants nothing. Two states are left that genuinely want a person:
+//
+//   - the bank is waiting for them in the Nordea ID app. The only real request in the flow, and it
+//     is reported only when the bank itself has said so.
+//   - a request arrived that this build cannot verify, or is not allowed to sign unattended. That
+//     is an anomaly, and a human reading it is exactly what the fallback panel is for.
+//
+// Everything else — a step being signed, a backoff, a finished setup — is a progress note, and a
+// progress note does not get to suspend a payment that is genuinely waiting.
+export function adminRequestNeedsAHuman(snapshot) {
+  if (!snapshot?.visible) return false;
+  if (snapshot.suppression) return snapshot.suppression === "awaiting_bank_approval";
+  // `canApprove` is deliberately NOT consulted: it goes false for the duration of a chain, which is
+  // precisely when a panel a human is needed for must stay in front of everything else.
+  return !snapshot.autoSignable;
 }
 
 export function createAdminRequestController({ fetchPendingAdminRequest, validateAdminInput }) {
@@ -144,11 +218,11 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
       if (!current && suppression) {
         const identity = `suppressed:${suppression}`;
         if (identity !== dismissedIdentity) {
-          return { visible: true, action: null, error: "", canApprove: false, suppression, identity, flowProgress };
+          return { visible: true, action: null, error: "", canApprove: false, suppression, identity, autoSignable: false, flowProgress };
         }
       }
       if (!current || current.identity === dismissedIdentity) {
-        return { visible: false, action: null, error: "", canApprove: false, suppression: null, flowProgress };
+        return { visible: false, action: null, error: "", canApprove: false, suppression: null, autoSignable: false, flowProgress };
       }
       return {
         visible: true,
@@ -156,6 +230,10 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
         error,
         // Never approvable without a derived meaning, and never while an approval is already running.
         canApprove: Boolean(current.action) && !approving,
+        // Whether the caller may sign this in the background. Derived from the SAME action object
+        // the panel would render, so "what is shown" and "what may go unshown" cannot disagree. An
+        // unverifiable request is never auto-signable, because it has no derived action at all.
+        autoSignable: mayAutoSignAdminAction(current.action),
         suppression: null,
         flowProgress
       };
@@ -238,8 +316,13 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
      *                    or confused backend walking a holder through a step they never saw.
      *   onStep(action) — renders the derived meaning BEFORE the signature is produced.
      *
-     * The chain halts by itself where a human is genuinely required: once the flow reaches the step
-     * that waits on the Nordea ID app, the service stops minting and `visible` goes false.
+     * The chain halts by itself where a human is genuinely required: once the bank tells the service
+     * it is waiting on somebody in the Nordea ID app, the service stops minting and answers with a
+     * suppression instead, which ends the chain as a SUCCESS rather than a failure.
+     *
+     * This is also the path taken when nobody tapped anything at all. `accept` is what keeps that
+     * honest: an unattended chain is bounded by the same enumerated set as a tapped one, so a
+     * backend cannot use the absence of a gesture to walk a phone somewhere new.
      */
     async approveChain({ sign, submit, context, accept, onStep, maxSteps = 6, deadlineMs = 5 * 60 * 1000 }) {
       if (typeof accept !== "function") {

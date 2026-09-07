@@ -11,7 +11,7 @@ import { decodeEncryptedBackupQrV1, encryptBackupQrV1, validateEncryptedBackupQr
 import { utf8Decode } from "./core/crypto/bytes.js";
 import { decodePhoneSharePackageV1, signNordeaAdminInputV1 } from "./core/protocol/signing.js";
 import { validateNordeaAdminSigningInputV1 } from "./core/protocol/envelopes.js";
-import { createAdminRequestController } from "./admin-request.js";
+import { adminRequestNeedsAHuman, createAdminRequestController, mayAutoSignAdminAction } from "./admin-request.js";
 import { authorizePendingPayments } from "./approval-kernel.js";
 import {
   createMultipartReassembler,
@@ -164,7 +164,11 @@ const state = {
   pollQueued: false,
   lockGeneration: 0,
   autoUnlockInFlight: false,
-  autoUnlockAttemptedGeneration: -1
+  autoUnlockAttemptedGeneration: -1,
+  // A background bank-setup chain is running. The poll fires every three seconds and a chain takes
+  // several round-trips, so without this a second poll would land mid-chain and be refused by the
+  // controller — noisily, in a status line nobody asked for.
+  adminAutoSignInFlight: false
 };
 
 function setStatus(message, level = "normal") {
@@ -1844,26 +1848,33 @@ function schedulePendingBundlePoll(delay = POLL_INTERVAL_MS) {
 // rather than to silence — the same choice adminDetailRows makes for unknown fields, and for the same
 // reason: something odd to ask about beats nothing at all.
 const ADMIN_SUPPRESSION_TEXT = Object.freeze({
+  // THE ONE THAT ASKS FOR SOMETHING. Everything else on this panel is now a progress note; this is
+  // the single sentence in the whole bank-setup flow that needs a person to get up and do
+  // something. It is shown ONLY when the bank itself has told the service it is waiting — never on
+  // a timer, never inferred from which step we think we are on — so a holder who reads it can trust
+  // that there is genuinely a prompt sitting in their Nordea ID app.
+  awaiting_bank_approval: "The bank is waiting for you to approve in your Nordea ID app. Open it and approve there — everything else happens by itself, and this will clear on its own once the bank has your approval.",
+  // Kept for a service that has not been updated yet: the ceiling that produced it no longer exists
+  // (a step that keeps failing now throttles and alerts rather than stopping), but a rolled-back
+  // backend must not render a raw state name at the one person who can act on it.
   attempt_ceiling: "This setup has failed repeatedly and has stopped retrying on its own. It needs an operator before it can continue.",
-  // Shown for a cooldown on ANY step, so it must not name the Nordea ID app — and must not say the
-  // flow picks up "on its own", which is the same false passivity: a new request does appear by
-  // itself, but it still has to be approved. The step counter beside this line says which step.
-  cooling_down: "The next request is not ready yet. It will appear here in a moment, and you will need to approve it.",
+  // A step that ran and got nowhere, waiting out its backoff. Nothing for the holder to do: it
+  // retries by itself and signs by itself. If it never clears, an operator hears about it through
+  // the service's own alerts, which is the channel for it now that nobody is watching this screen.
+  backing_off: "A bank request did not go through. It will be retried automatically — nothing is needed from you.",
+  // Same, from a service predating the rename. Same reassurance, same absence of a request to act.
+  cooling_down: "The next request is not ready yet. It will happen by itself in a moment.",
   already_pending: "A request is already in progress on another device or tab.",
-  // NOT "fully set up. There is nothing to approve." Both halves of that were read as final, and only
-  // one of them was even true at the time.
+  // This used to warn that renewal requests would keep appearing here, hourly, forever — which was
+  // true and was the problem. They no longer appear: the bank's access still lasts about an hour and
+  // still cannot renew itself unattended, but this app now signs the renewal in the background while
+  // it is open, without asking. So the sentence that set the expectation of hourly prompts is
+  // replaced by the one thing a holder still needs to know: keeping the app open is what keeps the
+  // access alive.
   //
-  // The bank's access token lasts about an hour. Nordea refuses to renew it unattended (the service
-  // logs "unsigned refresh rejected, needs_signature"), so the ONLY way it is ever renewed is a share
-  // holder approving a request on this panel, roughly hourly, for as long as the integration runs.
-  // A holder told the setup was finished, and then asked to approve a bank request an hour later and
-  // again the hour after that, is being taught that unexpected bank requests are normal — which is
-  // the exact condition the request rules on the service side are built to prevent, manufactured by
-  // the one screen that could have prevented it instead. Setting the expectation costs a sentence.
-  //
-  // What stays true: the step counter beside this still says 6 of 6, because the SETUP ladder really
-  // is finished. Renewal is maintenance and was deliberately kept off that ladder.
-  ready: "Bank setup is complete and nothing needs approving right now. The bank's access lasts about an hour and cannot renew itself, so renewal requests will keep appearing here — expect them, and read each one.",
+  // The step counter beside this still says 6 of 6, because the SETUP ladder really is finished.
+  // Renewal is maintenance and was deliberately kept off that ladder.
+  ready: "Bank setup is complete and nothing needs your approval. The bank's access is renewed automatically while this app is open — leaving it open on an unlocked share is what keeps payments flowing.",
   refresh_token_dead: "The bank consent has lapsed and the setup has to be started again. This needs an operator.",
   refreshed_server_side: "The access token was renewed automatically. Nothing needed your approval."
 });
@@ -2036,15 +2047,7 @@ function renderAdminRequest() {
   els.adminRequestPanel?.classList.toggle("hidden", !snap.visible);
   // A request that asks the holder for a DECISION takes the view to itself; the payment queue and
   // the kernel frame below it are hidden for as long as it is up (the rule lives in styles.css).
-  // Keyed on the derived action, and deliberately not on the other two things it could be keyed on:
-  //   `visible` would also cover the two states that ask for nothing — a suppression notice
-  //     ("nothing to approve; someone has to act in the Nordea ID app") and a request whose meaning
-  //     could not be derived. Neither is a decision, so neither is worth suspending a payment that
-  //     is genuinely waiting, and an unapprovable request that owned the screen would be a way to
-  //     park the payment view indefinitely.
-  //   `canApprove` goes false for the duration of an approval chain, which is precisely when the
-  //     panel must stay in front of everything else.
-  els.approvalView?.classList.toggle("admin-request-only", snap.visible && Boolean(snap.action));
+  els.approvalView?.classList.toggle("admin-request-only", adminRequestNeedsAHuman(snap));
   if (!snap.visible || !els.adminRequestDetails) return;
   els.adminRequestDetails.replaceChildren();
 
@@ -2056,9 +2059,15 @@ function renderAdminRequest() {
   // Approvable only when the controller derived a meaning. A live button beside an empty panel is
   // how a holder ends up signing something they were shown nothing about.
   els.adminRequestBadge.textContent = snap.suppression
-    ? "Nothing to approve"
-    : (snap.canApprove ? "Awaiting approval" : "Cannot verify");
+    ? (snap.suppression === "awaiting_bank_approval" ? "Approve in Nordea ID" : "Nothing to approve")
+    // An auto-signable request is being handled right now and asks for nothing; saying "awaiting
+    // approval" over a button nobody needs to press is how a screen teaches people to press it.
+    : (snap.autoSignable ? "Signing automatically" : (snap.canApprove ? "Awaiting approval" : "Cannot verify"));
   els.adminRequestBadge.className = "badge badge-warn";
+  // Hidden for anything the app signs by itself: a live button beside a request already being
+  // handled invites a second, competing gesture, and the controller would refuse it as
+  // already_approving — a confusing answer to a reasonable action.
+  els.approveAdminRequestButton.hidden = snap.autoSignable || Boolean(snap.suppression);
   els.approveAdminRequestButton.disabled = !snap.canApprove;
   // Keyed on the DERIVED action, like every other line on this panel — never on anything the
   // backend merely asserts. An unrecognised action falls back to the generic label rather than
@@ -2070,6 +2079,9 @@ function renderAdminRequest() {
   const rows = snap.suppression
     ? [["Status", ADMIN_SUPPRESSION_TEXT[snap.suppression] ?? `The service is not asking for anything right now (${snap.suppression}).`]]
     : (snap.canApprove
+      // Still every field of the derived action, auto-signed or not. What the app signs on a
+      // holder's behalf is not a thing they are forbidden to read — and when a chain stalls, this
+      // is the only place that says which request it stalled on.
       ? adminDetailRows(snap.action)
       : [["Refused", snap.error || "This request could not be verified and cannot be approved."]]);
   for (const [label, value] of rows) {
@@ -2096,20 +2108,88 @@ async function refreshPendingAdminRequest() {
     renderAdminRequest();
     return;
   }
+  // A chain in flight runs its own refresh before every step, and the poll fires every three
+  // seconds. Letting the poll refresh underneath it would replace the tuple the chain is walking
+  // with a newer one mid-sequence — harmless, because approve() signs the tuple it captured and
+  // `accept` bounds every step either way, but pointless churn against the backend and a confusing
+  // thing to read in a network log.
+  if (state.adminAutoSignInFlight) return;
   await adminRequests.refresh();
   renderAdminRequest();
+  // THE WHOLE CHANGE, IN ONE LINE. What was a request waiting for a tap is now a request waiting
+  // for a poll. Everything the bank setup needs — the six-step chain, and the access-token renewal
+  // that recurs for the life of the integration — is signed here, in the background, for as long as
+  // somebody has this app open with their share unlocked.
+  //
+  // Deliberately AFTER the render: if the request turns out to be one this build will not sign
+  // unattended, the panel is already up and a human is already looking at it.
+  await autoSignPendingAdminRequest();
 }
 
-// CRASH RECOVERY for the payment-authorization round.
+// Sign whatever the service has minted, if and only if this build is allowed to sign it unattended.
+//
+// The gate is `snap.autoSignable`, derived in admin-request.js from the SAME action object the panel
+// would render — which is itself derived from the bytes that will be signed. So there is no path by
+// which a request the phone would have shown a human gets signed without one; the two answers come
+// from one value.
+async function autoSignPendingAdminRequest() {
+  if (state.adminAutoSignInFlight) return;
+  const snap = adminRequests.snapshot();
+  if (!snap.visible || !snap.canApprove || !snap.autoSignable) return;
+  state.adminAutoSignInFlight = true;
+  try {
+    await runAdminChain({ automatic: true });
+  } finally {
+    state.adminAutoSignInFlight = false;
+  }
+}
+
+// The bundles THIS holder approved, as far as this phone can tell.
+//
+// Two sources, and neither is a security boundary — see the note in approval-kernel.js. This bounds a
+// backend bug or a mix-up between the two holders; the guarantee that a background signature can only
+// ever finish authorizing an already-created payment is structural and lives in the envelope.
+//
+//   - state.recentApprovals is refreshed on every poll from the company-signed, schema-validated
+//     /recent-approvals response, and each item carries the approver_id that approved it. It is
+//     DURABLE in the only sense that matters here: it survives a reload, a cleared cache and a new
+//     device, because the record lives on the server rather than in this tab.
+//   - state.approvedBundleIds covers the seconds between approving a bundle and the next poll seeing
+//     it, which is exactly when the round normally runs.
+//
+// Deliberately NOT a persisted local set. That was the obvious alternative and it is worse: storage is
+// cleared on re-enrollment and absent on a new device, so a phone that lost it would refuse to finish
+// a payment forever — silently disabling the recovery path that is the whole reason this round exists.
+// The 72h /recent-approvals window matches both Nordea's authorization window and the backend's own
+// candidate window, so anything still signable is still visible here.
+function bundlesThisHolderApproved() {
+  const mine = new Set(state.approvedBundleIds);
+  const approverId = state.phoneSharePackage?.approver_id;
+  if (approverId) {
+    for (const approval of state.recentApprovals) {
+      if (approval?.approver_id === approverId && typeof approval.bundle_id === "string") {
+        mine.add(approval.bundle_id);
+      }
+    }
+  }
+  return mine;
+}
+
+// The background half of the payment-authorization round. NOBODY IS ASKED.
 //
 // A payment the bank has created but nobody has authorized will never execute — it just ages out of
 // the 72h window. That happens whenever the phone goes away between the submit and the second signing
 // round (app closed, network dropped, tab killed), and it is the live production state this was
 // written for: a 1 DKK payout accepted on 2026-09-07 and still sitting at AUTHORIZATION_PARTIAL.
 //
-// So the round is not only chained after an approval; it also runs when a holder opens the app. The
-// backend offers the bundle that has been waiting longest, so whichever holder looks first finishes
-// whatever is outstanding — including payments submitted in a session that ended long ago.
+// So the round runs on every poll while the share is unlocked, and after an approval, with no gesture
+// and no panel. The holder already answered this question when they approved the bundle; all that is
+// left is the half of it that could not be signed until the bank had assigned its ids. What they get
+// instead of a prompt is a status line here and the bank status on each payment in history.
+//
+// The backend now offers only the bundles THIS holder approved, and this end refuses anything it
+// cannot relate to one of them — so an authorization waiting on the other holder is left for them
+// rather than quietly completed here.
 //
 // Never throws into the refresh cycle and never touches the approval UI: a holder opening the app to
 // approve something must not be shown a failure from a background errand. Repeating it is safe by
@@ -2123,7 +2203,10 @@ async function recoverPendingPaymentAuthorization() {
     outcome = await authorizePendingPayments({
       phoneSharePackage: state.phoneSharePackage,
       backendOrigin: state.backendOrigin,
-      integrityManifest: state.integrityManifest
+      integrityManifest: state.integrityManifest,
+      // Read at call time, so a poll that has not landed yet simply means "nothing recognised this
+      // cycle" rather than a wrong answer. The next poll picks it up.
+      recognizeBundle: (bundleId) => bundlesThisHolderApproved().has(bundleId)
     });
   } catch {
     // Silent by design: the backend alerts on a payment left waiting, and that is the channel for it.
@@ -2134,15 +2217,46 @@ async function recoverPendingPaymentAuthorization() {
   }
   const stillPartial = outcome.result?.still_partial ?? [];
   const count = outcome.visibleAuthorization?.payment_count ?? 0;
+  // The one thing the holder must be able to see happened without having been asked. `still_partial`
+  // is the bank saying it wants another signer, which no further signature from this phone can supply.
   setStatus(
     stillPartial.length > 0
-      ? `Authorized ${count} payments from an earlier submission; ${stillPartial.length} still need a second approver`
-      : `Authorized ${count} payments from an earlier submission`,
+      ? `Payment authorization completed for ${count} payments; ${stillPartial.length} still need a second approver at the bank`
+      : `Payment authorization completed for ${count} payments`,
     stillPartial.length > 0 ? "warning" : "normal"
   );
 }
 
-async function approvePendingAdminRequest() {
+// Which reasons for a chain ending are worth a line on the status bar.
+//
+// Nearly nothing is, and that is the point: a chain that ran, signed four requests and stopped
+// because the bank is now waiting on a human has done exactly what it should, and narrating it
+// would put bank chatter in front of a holder whose actual job on this screen is approving
+// payments. So the filter is "does this need a person" — the same question the panel asks.
+const ADMIN_OUTCOMES_WORTH_SAYING = Object.freeze(new Set([
+  // The one real request in the flow.
+  "awaiting_bank_approval",
+  // Both need an operator, and neither resolves by waiting.
+  "refresh_token_dead",
+  "attempt_ceiling"
+]));
+
+/**
+ * Run the bank-setup chain to wherever it stops.
+ *
+ * `automatic` is not a different chain — it is the same sequence with the same bounds, run without
+ * a gesture and without narrating itself. Two things do differ, and both are about consent rather
+ * than cosmetics:
+ *
+ *   accept — an automatic run is bounded by ADMIN_AUTO_SIGN_ACTIONS, the set this build is allowed
+ *            to sign unattended. A manual run is bounded by the wider set a human can be shown and
+ *            can agree to. An automatic run can therefore never sign something a tapped one would
+ *            have had to display first.
+ *   onStep — a manual run names each step as it is signed, because the holder authorized a SEQUENCE
+ *            and is owed the sight of it. An automatic run has no such debt; it only keeps the
+ *            panel's rendered action current for anyone who happens to be looking.
+ */
+async function runAdminChain({ automatic = false } = {}) {
   // Capture the signing context ONCE, here. Reading state.phoneSharePackage / state.backendOrigin
   // after an await would let a share signed for one backend be submitted to another if the origin
   // changed mid-signature; the controller's epoch check then refuses the submission outright.
@@ -2151,21 +2265,21 @@ async function approvePendingAdminRequest() {
     backendOrigin: state.backendOrigin,
     shareIndex: decodePhoneSharePackageV1(state.phoneSharePackage).shareIndex
   });
-  els.approveAdminRequestButton.disabled = true;
+  if (!automatic) els.approveAdminRequestButton.disabled = true;
   try {
-    // ONE gesture, several signatures. Obtaining bank access is six sequential HTTP requests that
-    // cannot be bundled into a single signature — each signs its own request, and steps after the
-    // first sign a URL containing an id only the previous response produces. Six near-identical
-    // prompts is the approval-fatigue failure this panel exists to prevent, so the holder authorizes
-    // the SEQUENCE and every step is rendered as it is signed.
+    // Several signatures, one authorization. Obtaining bank access is six sequential HTTP requests
+    // that cannot be bundled into a single signature — each signs its own request, and steps after
+    // the first sign a URL containing an id only the previous response produces.
     //
-    // `accept` is the enumerated set of bank-setup actions. Anything else halts the chain and falls
-    // back to this panel, where a human reads it — a backend cannot walk a holder somewhere new.
+    // `accept` is the enumerated set. Anything else halts the chain and falls back to the panel,
+    // where a human reads it — a backend cannot walk a phone somewhere new, gesture or no gesture.
     const outcome = await adminRequests.approveChain({
       context,
-      accept: (action) => Object.hasOwn(ADMIN_ACTION_LABELS, action?.action),
+      accept: automatic
+        ? mayAutoSignAdminAction
+        : (action) => Object.hasOwn(ADMIN_ACTION_LABELS, action?.action),
       onStep: (action, index) => {
-        setStatus(`Step ${index + 1}: ${adminActionLabel(action)}`, "normal");
+        if (!automatic) setStatus(`Step ${index + 1}: ${adminActionLabel(action)}`, "normal");
         renderAdminRequest();
       },
       sign: async (input, _action, ctx) => signNordeaAdminInputV1(input, ctx.phoneSharePackage),
@@ -2182,10 +2296,13 @@ async function approvePendingAdminRequest() {
     });
     const done = outcome.steps?.length ?? 0;
     if (!outcome.ok) {
+      // A FAILURE IS ALWAYS SAID, automatic or not. Silence is what the background is for; a bank
+      // setup that stopped going is the case where invisibility becomes the problem rather than the
+      // feature, and nothing else on this screen would ever mention it.
       const message = {
         context_changed: "Bank setup stopped because the device context changed",
-        outside_authorized_set: "Bank setup stopped: the bank asked for a step you did not approve",
-        deadline: "Bank setup stopped because it was taking too long; approve again to continue",
+        outside_authorized_set: "Bank setup stopped: the bank asked for a step this app will not sign on its own",
+        deadline: "Bank setup stopped because it was taking too long; it will resume by itself",
         step_limit: "Bank setup stopped after the expected number of steps",
         not_approvable: "This bank request could not be verified and was not approved"
       }[outcome.reason] ?? "This bank request could not be verified and was not approved";
@@ -2193,8 +2310,17 @@ async function approvePendingAdminRequest() {
       return;
     }
     // A paused chain is a SUCCESS: the sequence ran as far as it can without the human doing the
-    // out-of-band approval in the Nordea ID app. Say what is waited on, not just that it stopped.
-    //
+    // out-of-band approval in the Nordea ID app.
+    const paused = ADMIN_SUPPRESSION_TEXT[outcome.suppression];
+    if (automatic) {
+      // Say only what needs a person. Everything else the chain does — signing four requests,
+      // renewing an access token, finding nothing to do — is plumbing, and plumbing that announces
+      // itself on the same line as "Bundle ready for review" is not invisible, it is just quieter.
+      if (paused && ADMIN_OUTCOMES_WORTH_SAYING.has(outcome.suppression)) {
+        setStatus(paused, "warning");
+      }
+      return;
+    }
     // "Advanced N steps" is WRONG for the status check, and wrong in the way that matters. Checking
     // whether the bank has recorded an approval signs a request and completes a step, so the count
     // goes up whether or not anything actually moved — and a holder who has not yet approved in the
@@ -2202,7 +2328,6 @@ async function approvePendingAdminRequest() {
     // for him. Naming that case is the whole point of this screen.
     const lastStep = outcome.steps?.[outcome.steps.length - 1]?.action;
     const onlyChecked = lastStep === "corporate_access_status" && !outcome.suppression;
-    const paused = ADMIN_SUPPRESSION_TEXT[outcome.suppression];
     setStatus(
       paused
         ?? (onlyChecked
@@ -2215,6 +2340,13 @@ async function approvePendingAdminRequest() {
   } finally {
     renderAdminRequest();
   }
+}
+
+// The manual fallback, still wired to the button. It is reached only for a request this build will
+// not sign unattended — an action outside the auto-sign set, or one whose meaning could not be
+// derived — which is exactly the case where a person should be reading it.
+async function approvePendingAdminRequest() {
+  return runAdminChain({ automatic: false });
 }
 
 async function pollPendingBundles(options = {}) {

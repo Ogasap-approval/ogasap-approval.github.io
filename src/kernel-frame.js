@@ -320,6 +320,10 @@ async function runPaymentAuthorizationRound({ lockEpoch }) {
         phoneSharePackage: state.phoneSharePackage,
         backendOrigin: state.backendOrigin,
         integrityManifest: state.integrityManifest,
+        // The bundle this holder just approved is in the set by definition — the shell adds it before
+        // this runs and syncs it here. Anything else offered in this window belongs to somebody else's
+        // decision and is left to them; the shell's background round is what eventually finishes those.
+        recognizeBundle: (bundleId) => state.approvedBundleIds.has(bundleId),
         isCancelled: () => lockEpoch !== state.lockEpoch || !state.phoneSharePackage,
         onStatus: setStatus
       });
@@ -331,7 +335,10 @@ async function runPaymentAuthorizationRound({ lockEpoch }) {
     }
     if (!outcome.authorized) {
       // Nothing to authorize YET is the ordinary case in the first second or two after a submit.
-      if (outcome.reason === "nothing_to_sign" || outcome.reason === "nothing_pending") {
+      // `bundle_not_recognised` joins them: the backend offered a bundle this holder did not approve,
+      // which is not this phone's to finish and not worth a warning.
+      if (outcome.reason === "nothing_to_sign" || outcome.reason === "nothing_pending"
+          || outcome.reason === "bundle_not_recognised") {
         if (attempt < PAYMENT_AUTHORIZATION_ATTEMPTS - 1) {
           await sleep(PAYMENT_AUTHORIZATION_RETRY_MS);
           continue;
@@ -351,7 +358,7 @@ async function runPaymentAuthorizationRound({ lockEpoch }) {
       );
       return;
     }
-    setStatus(`Bundle approved and ${outcome.visibleAuthorization?.payment_count ?? 0} payments authorized`);
+    setStatus(`Bundle approved and ${outcome.visibleAuthorization?.payment_count ?? 0} payments authorized with the bank`);
     return;
   }
 }
@@ -400,10 +407,11 @@ async function approveBundle() {
       bundle_id: state.bundle.bundle_id,
       result: approvalResult
     });
-    // SECOND ROUND, same gesture. The approval above only gets the payments CREATED at Nordea; the bank
-    // will not execute them until it has a payment authorization, and that request names them by
-    // bank-assigned ids, so it could not have been signed a moment ago. The holder is still here and
-    // still holds their share, so we ask now rather than making them come back.
+    // SECOND ROUND, NO SECOND GESTURE. The approval above only gets the payments CREATED at Nordea; the
+    // bank will not execute them until it has a payment authorization, and that request names them by
+    // bank-assigned ids, so it could not have been signed a moment ago. The holder is not asked again —
+    // they answered when they approved this bundle, and this finishes that same answer while the share
+    // is still in hand.
     //
     // Deliberately after `post("approved")` and deliberately unable to fail the approval: the bundle IS
     // approved, and an authorization that does not land is a separate, recoverable state — not a reason
