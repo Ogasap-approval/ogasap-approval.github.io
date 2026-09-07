@@ -120,6 +120,7 @@ const ids = [
   "activityDetailClose",
   "adminRequestPanel",
   "adminRequestBadge",
+  "adminRequestTitle",
   "adminRequestProgress",
   "adminRequestDetails",
   "approveAdminRequestButton",
@@ -2063,7 +2064,15 @@ function renderAdminRequest() {
     // An auto-signable request is being handled right now and asks for nothing; saying "awaiting
     // approval" over a button nobody needs to press is how a screen teaches people to press it.
     : (snap.autoSignable ? "Signing automatically" : (snap.canApprove ? "Awaiting approval" : "Cannot verify"));
-  els.adminRequestBadge.className = "badge badge-warn";
+  // Amber means "you", and nothing else. A warning-styled badge over "Nothing to approve", under a
+  // heading that says "request", is three signals disagreeing — and the holder learns to skim the one
+  // panel that will later tell them to open their Nordea ID app. So the styling and the heading follow
+  // the state: attention only when a person is actually being asked for something.
+  const needsHolder = snap.suppression
+    ? snap.suppression === "awaiting_bank_approval"
+    : (!snap.autoSignable && (snap.canApprove || Boolean(snap.error)));
+  els.adminRequestBadge.className = needsHolder ? "badge badge-warn" : "badge badge-ok";
+  els.adminRequestTitle.textContent = needsHolder ? "Bank admin request" : "Bank access";
   // Hidden for anything the app signs by itself: a live button beside a request already being
   // handled invites a second, competing gesture, and the controller would refuse it as
   // already_approving — a confusing answer to a reasonable action.
