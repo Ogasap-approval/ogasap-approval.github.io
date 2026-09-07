@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "d8e63084fba0defd7d90526ae110deddda4af821c43772f2311fdfc1056b1820"
+      "sha256": "351c7f3ac4c0a760dc538069e7201cb52f8261a542f98dbd0c0bfe2650af5f3a"
     },
     {
       "path": "src/admin-request.js",
@@ -29,15 +29,15 @@
     },
     {
       "path": "src/api-client.js",
-      "sha256": "b74546173832e2a2d6f2d55f2702c8d0773c9974fbab9ab94d548ee5e67f8571"
+      "sha256": "ba223e17ffefa754c04e4a153566d5476dd16b35667ddb5e04ee2207ee7784d3"
     },
     {
       "path": "src/app.js",
-      "sha256": "1813a7df0915c0f5f28003d5c56f24dda7cd57150e98d7f63f479afd4d74576a"
+      "sha256": "0151323b6c54fe1fdc827dbd8443054d7c1089e3f4c790d29f1f892770d56f2b"
     },
     {
       "path": "src/approval-kernel.js",
-      "sha256": "a2375388cfe091c564413ec77f597d79aaf257a6289d9c815cbcf90bc3cbb845"
+      "sha256": "d98a17e0c9fbecc865f68677bb7312d97f738806e9184c3f8b38ee4cc6d719b1"
     },
     {
       "path": "src/assets/icon.svg",
@@ -85,15 +85,15 @@
     },
     {
       "path": "src/core/protocol/envelopes.js",
-      "sha256": "66b3dfbb793225a9ed46895bf575b32681799a9d7d9e00e929106fd053190b1c"
+      "sha256": "0be41e25f6137a10b6e16f1765951d01b29444382aafcfb53c71019b15bf31ed"
     },
     {
       "path": "src/core/protocol/release.js",
-      "sha256": "444d522c050beaf5a950cacdba4753d873313874825b96af2aca4d775626dde7"
+      "sha256": "8ef1e83b43d731511bc64bdfa36acb9f51af63bb5f3c6aa899dd2b1adb9311b3"
     },
     {
       "path": "src/core/protocol/signing.js",
-      "sha256": "7767d05281269b56508ca94a4961c9910fc97b916d73ca052935ea0baf9e89fd"
+      "sha256": "cd52e4d988cff1e5706dc63052339056f118dfa49a72fa2a704371efa10fe0ff"
     },
     {
       "path": "src/force-update.js",
@@ -117,7 +117,7 @@
     },
     {
       "path": "src/kernel-frame.js",
-      "sha256": "6bf4a9976d4d378c053d35118cb72c97c87f6b4733eb324ce9e608305d97be56"
+      "sha256": "f71ca140a931eb701177d108391c6e91a01b17dca2443797fae867bb622970bf"
     },
     {
       "path": "src/payment-view.js",
@@ -137,7 +137,7 @@
     },
     {
       "path": "src/response-schemas.js",
-      "sha256": "cbcf99db515bfb40ea88d6b886490f3e76ce5cb06f830531e298a17d17249d79"
+      "sha256": "d3787cfc3198a3fd1fc6cef483679c76b966be6f01434b24a2d10cf61e399dee"
     },
     {
       "path": "src/sign-task-worker.js",

@@ -21,6 +21,11 @@ const ENROLL_CREDENTIAL_PATH = "/api/approval/enroll-credential";
 const MIGRATION_REQUEST_PATH = "/api/approval/migration-request";
 const PENDING_ADMIN_REQUEST_PATH = "/api/approval/pending-admin-request";
 const ADMIN_APPROVAL_PATH = "/api/approval/admin-approval";
+// The payment-authorization round. NEW paths rather than new fields on the bundle endpoints: a phone
+// on a cached build validates responses with additionalProperties:false, so an added field breaks every
+// poll from an un-updated PWA while an added endpoint is simply never called by one.
+const PENDING_PAYMENT_SIGN_PATH = "/api/approval/pending-payment-sign";
+const PAYMENT_SIGN_PATH = "/api/approval/payment-sign";
 const BACKEND_RESPONSE_HEADER = "X-Approval-Backend-Response";
 const EMPTY_BODY = new Uint8Array();
 
@@ -307,6 +312,75 @@ export async function submitAdminApproval(approval, phoneSharePackage, backendOr
     requestClientNonce: auth.clientNonce
   });
   return validateResponseBody("admin_approval_result_v1", result);
+}
+
+// ---------------------------------------------------------------------------------------------------
+// The payment-authorization round (nordea_payment_sign_input_v1).
+//
+// POST /corporate/premium/v2/payments only CREATES payments at Nordea; the bank waits for a payment
+// authorization before executing them. That request names payments by bank-assigned ids, so it cannot
+// be signed until the POST has returned — hence a second round rather than part of the bundle approval.
+// ---------------------------------------------------------------------------------------------------
+export async function fetchPendingPaymentSign(phoneSharePackage, backendOrigin) {
+  const auth = await signedApprovalHeaders({
+    method: "GET",
+    path: PENDING_PAYMENT_SIGN_PATH,
+    phoneSharePackage,
+    backendOrigin
+  });
+  const response = await fetch(apiUrl(PENDING_PAYMENT_SIGN_PATH, {}, backendOrigin), {
+    method: "GET",
+    headers: auth.headers,
+    cache: "no-store"
+  });
+  const body = await verifiedJsonResponse(response, {
+    method: "GET",
+    path: PENDING_PAYMENT_SIGN_PATH,
+    phoneSharePackage,
+    requestServerNonce: auth.serverNonce,
+    requestClientNonce: auth.clientNonce
+  });
+  validateResponseBody("pending_payment_sign_response_v1", body);
+  return {
+    paymentSignInput: body.payment_sign_input ?? null,
+    suppression: body.suppression ?? null
+  };
+}
+
+/**
+ * Send the holder's shares for every request of one authorization.
+ *
+ * `assertStillValid` is re-checked immediately before the send, for the same reason it is on the admin
+ * path: preparing this involves a nonce round-trip and a backend-auth signature, and a lock or context
+ * change during that window must stop the POST rather than merely be noticed afterwards.
+ */
+export async function submitPaymentSign(approval, phoneSharePackage, backendOrigin, { assertStillValid } = {}) {
+  const body = JSON.stringify(approval);
+  const bodyBytes = utf8Encode(body);
+  const auth = await signedApprovalHeaders({
+    method: "POST",
+    path: PAYMENT_SIGN_PATH,
+    bodyBytes,
+    phoneSharePackage,
+    backendOrigin
+  });
+  if (typeof assertStillValid === "function" && !assertStillValid()) {
+    throw new AdminApprovalAbandonedError();
+  }
+  const response = await fetch(apiUrl(PAYMENT_SIGN_PATH, {}, backendOrigin), {
+    method: "POST",
+    headers: { ...auth.headers, "Content-Type": "application/json" },
+    body,
+    cache: "no-store"
+  });
+  const result = await verifiedJsonResponse(response, {
+    method: "POST",
+    path: PAYMENT_SIGN_PATH,
+    phoneSharePackage,
+    requestServerNonce: auth.serverNonce,
+    requestClientNonce: auth.clientNonce
+  });
+  return validateResponseBody("payment_sign_result_v1", result);
 }
 
 export async function enrollApprovalCredential(enrollment, phoneSharePackage, backendOrigin) {

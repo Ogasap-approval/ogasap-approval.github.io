@@ -12,6 +12,7 @@ import { utf8Decode } from "./core/crypto/bytes.js";
 import { decodePhoneSharePackageV1, signNordeaAdminInputV1 } from "./core/protocol/signing.js";
 import { validateNordeaAdminSigningInputV1 } from "./core/protocol/envelopes.js";
 import { createAdminRequestController } from "./admin-request.js";
+import { authorizePendingPayments } from "./approval-kernel.js";
 import {
   createMultipartReassembler,
   MULTIPART_PREFIX
@@ -1202,6 +1203,7 @@ async function enrollFromPackage(pkg) {
   }
   pollPendingBundles();
   refreshPendingAdminRequest().catch(() => {});
+  recoverPendingPaymentAuthorization().catch(() => {});
 }
 
 function storableCredentialRecord(credential, prfWrap) {
@@ -1828,6 +1830,7 @@ function schedulePendingBundlePoll(delay = POLL_INTERVAL_MS) {
     // Admin requests are created by an operator at an arbitrary moment; fetching them only right
     // after enrollment meant a request raised while the app was already open would never appear.
     refreshPendingAdminRequest().catch(() => {});
+  recoverPendingPaymentAuthorization().catch(() => {});
   }, delay);
 }
 
@@ -1847,7 +1850,20 @@ const ADMIN_SUPPRESSION_TEXT = Object.freeze({
   // itself, but it still has to be approved. The step counter beside this line says which step.
   cooling_down: "The next request is not ready yet. It will appear here in a moment, and you will need to approve it.",
   already_pending: "A request is already in progress on another device or tab.",
-  ready: "Bank access is fully set up. There is nothing to approve.",
+  // NOT "fully set up. There is nothing to approve." Both halves of that were read as final, and only
+  // one of them was even true at the time.
+  //
+  // The bank's access token lasts about an hour. Nordea refuses to renew it unattended (the service
+  // logs "unsigned refresh rejected, needs_signature"), so the ONLY way it is ever renewed is a share
+  // holder approving a request on this panel, roughly hourly, for as long as the integration runs.
+  // A holder told the setup was finished, and then asked to approve a bank request an hour later and
+  // again the hour after that, is being taught that unexpected bank requests are normal — which is
+  // the exact condition the request rules on the service side are built to prevent, manufactured by
+  // the one screen that could have prevented it instead. Setting the expectation costs a sentence.
+  //
+  // What stays true: the step counter beside this still says 6 of 6, because the SETUP ladder really
+  // is finished. Renewal is maintenance and was deliberately kept off that ladder.
+  ready: "Bank setup is complete and nothing needs approving right now. The bank's access lasts about an hour and cannot renew itself, so renewal requests will keep appearing here — expect them, and read each one.",
   refresh_token_dead: "The bank consent has lapsed and the setup has to be started again. This needs an operator.",
   refreshed_server_side: "The access token was renewed automatically. Nothing needed your approval."
 });
@@ -1868,6 +1884,14 @@ const ADMIN_FLOW_STEP_LABELS = Object.freeze({
   need_code: "Approve in your Nordea ID app, then come back and approve here again",
   need_token: "Exchanging the access token",
   need_signing_key: "Creating the signing key",
+  // The same two-app shape as need_code, and it was missing entirely — so the holder on the last rung
+  // of the ladder read "Step 6 of 6 — need_signing_key_status", the raw state name. The fallback that
+  // produced it is for a backend that GAINS a step, and this is not one: the service has had this
+  // state since it learned that a key the bank answers with is AUTHENTICATION_PENDING and cannot sign
+  // anything until its SCA completes. The key is created with authentication_type DECOUPLED, so the
+  // bank pushes that SCA to the nominated Nordea ID — and, exactly as with the code, nothing collects
+  // the result on the holder's behalf.
+  need_signing_key_status: "Activate the key in your Nordea ID app, then come back and approve here again",
   ready: "Setup complete"
 });
 
@@ -2074,6 +2098,48 @@ async function refreshPendingAdminRequest() {
   }
   await adminRequests.refresh();
   renderAdminRequest();
+}
+
+// CRASH RECOVERY for the payment-authorization round.
+//
+// A payment the bank has created but nobody has authorized will never execute — it just ages out of
+// the 72h window. That happens whenever the phone goes away between the submit and the second signing
+// round (app closed, network dropped, tab killed), and it is the live production state this was
+// written for: a 1 DKK payout accepted on 2026-09-07 and still sitting at AUTHORIZATION_PARTIAL.
+//
+// So the round is not only chained after an approval; it also runs when a holder opens the app. The
+// backend offers the bundle that has been waiting longest, so whichever holder looks first finishes
+// whatever is outstanding — including payments submitted in a session that ended long ago.
+//
+// Never throws into the refresh cycle and never touches the approval UI: a holder opening the app to
+// approve something must not be shown a failure from a background errand. Repeating it is safe by
+// construction — signing authorizes payments the bank has already created and cannot create another.
+async function recoverPendingPaymentAuthorization() {
+  if (!state.phoneSharePackage || !state.backendOrigin || !state.integrityManifest) {
+    return;
+  }
+  let outcome;
+  try {
+    outcome = await authorizePendingPayments({
+      phoneSharePackage: state.phoneSharePackage,
+      backendOrigin: state.backendOrigin,
+      integrityManifest: state.integrityManifest
+    });
+  } catch {
+    // Silent by design: the backend alerts on a payment left waiting, and that is the channel for it.
+    return;
+  }
+  if (!outcome.authorized) {
+    return;
+  }
+  const stillPartial = outcome.result?.still_partial ?? [];
+  const count = outcome.visibleAuthorization?.payment_count ?? 0;
+  setStatus(
+    stillPartial.length > 0
+      ? `Authorized ${count} payments from an earlier submission; ${stillPartial.length} still need a second approver`
+      : `Authorized ${count} payments from an earlier submission`,
+    stillPartial.length > 0 ? "warning" : "normal"
+  );
 }
 
 async function approvePendingAdminRequest() {
@@ -2407,6 +2473,7 @@ async function init() {
   showView(routeFromLocation(), { history: "replace" });
   await pollPendingBundles();
   await refreshPendingAdminRequest().catch(() => {});
+  await recoverPendingPaymentAuthorization().catch(() => {});
 }
 
 init().catch((error) => {

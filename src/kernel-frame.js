@@ -1,4 +1,4 @@
-import { approveReviewedBundle } from "./approval-kernel.js";
+import { approveReviewedBundle, authorizePendingPayments } from "./approval-kernel.js";
 import { isTrustedFrameMessage } from "./frame-messaging.js";
 import { loadIntegrityManifest } from "./integrity.js";
 import { amountMinorToDecimal, deriveVisiblePaymentFromInput } from "./payment-view.js";
@@ -300,6 +300,62 @@ async function applyState(message) {
   renderBundle();
 }
 
+// How long to keep asking the backend for something to authorize after an approval.
+//
+// The submit is a fire-and-forget drain, so the bank payment ids do not exist the instant the approval
+// returns. A few seconds covers the round-trip; past that the round is left to the recovery path rather
+// than holding the holder's screen. Retrying is safe by construction — signing authorizes payments the
+// bank has already created and cannot bring a second one into being.
+const PAYMENT_AUTHORIZATION_ATTEMPTS = 5;
+const PAYMENT_AUTHORIZATION_RETRY_MS = 1200;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function runPaymentAuthorizationRound({ lockEpoch }) {
+  for (let attempt = 0; attempt < PAYMENT_AUTHORIZATION_ATTEMPTS; attempt += 1) {
+    if (lockEpoch !== state.lockEpoch || !state.phoneSharePackage) return;
+    let outcome;
+    try {
+      outcome = await authorizePendingPayments({
+        phoneSharePackage: state.phoneSharePackage,
+        backendOrigin: state.backendOrigin,
+        integrityManifest: state.integrityManifest,
+        isCancelled: () => lockEpoch !== state.lockEpoch || !state.phoneSharePackage,
+        onStatus: setStatus
+      });
+    } catch (error) {
+      // Never downgrade the approval. The money is approved and submitted; what failed is the
+      // follow-on, and the backend alerts on a payment left waiting.
+      setStatus(`Bundle approved. Payment authorization could not be completed: ${error.message}`, "warning");
+      return;
+    }
+    if (!outcome.authorized) {
+      // Nothing to authorize YET is the ordinary case in the first second or two after a submit.
+      if (outcome.reason === "nothing_to_sign" || outcome.reason === "nothing_pending") {
+        if (attempt < PAYMENT_AUTHORIZATION_ATTEMPTS - 1) {
+          await sleep(PAYMENT_AUTHORIZATION_RETRY_MS);
+          continue;
+        }
+        return;
+      }
+      setStatus(`Bundle approved. Payment authorization not requested (${outcome.reason})`, "warning");
+      return;
+    }
+    const stillPartial = outcome.result?.still_partial ?? [];
+    if (stillPartial.length > 0) {
+      // The bank accepted OUR authorization and still wants another one — a two-together mandate. No
+      // further signature from this holder can change that, so it is said plainly rather than retried.
+      setStatus(
+        `Authorized ${outcome.visibleAuthorization?.payment_count ?? 0} payments; ${stillPartial.length} still need a second approver`,
+        "warning"
+      );
+      return;
+    }
+    setStatus(`Bundle approved and ${outcome.visibleAuthorization?.payment_count ?? 0} payments authorized`);
+    return;
+  }
+}
+
 async function approveBundle() {
   if (!state.phoneSharePackage || !state.webauthnCredential || !state.backendOrigin || !state.bundle || currentBundleApproved()) {
     return;
@@ -344,6 +400,15 @@ async function approveBundle() {
       bundle_id: state.bundle.bundle_id,
       result: approvalResult
     });
+    // SECOND ROUND, same gesture. The approval above only gets the payments CREATED at Nordea; the bank
+    // will not execute them until it has a payment authorization, and that request names them by
+    // bank-assigned ids, so it could not have been signed a moment ago. The holder is still here and
+    // still holds their share, so we ask now rather than making them come back.
+    //
+    // Deliberately after `post("approved")` and deliberately unable to fail the approval: the bundle IS
+    // approved, and an authorization that does not land is a separate, recoverable state — not a reason
+    // to tell the holder their approval failed.
+    await runPaymentAuthorizationRound({ lockEpoch });
   } catch (error) {
     if (error.message === "Approval cancelled by app lock" || error.name === "AbortError") {
       setResult(null);

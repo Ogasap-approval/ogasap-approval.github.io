@@ -10,7 +10,8 @@ import {
   canonicalBundleApprovalEnvelopeV1,
   paddedBankReadSigningDigestV1,
   paddedBankSigningDigestV1,
-  validateNordeaAdminSigningInputV1
+  validateNordeaAdminSigningInputV1,
+  validateNordeaPaymentSignInputV1
 } from "./envelopes.js";
 import { emsaPkcs1v15Encode } from "../crypto/pkcs1v15.js";
 
@@ -296,5 +297,61 @@ export async function signNordeaAdminInputV1(adminInput, phoneSharePackage, opti
     visible_admin_action: visibleAdminAction,
     sign_share: signShare,
     sign_share_base64url: bytesToBase64url(signShare)
+  };
+}
+
+
+/**
+ * Signs the payment-authorization round: the SECOND signature a submitted bundle needs.
+ *
+ * `POST /corporate/premium/v2/payments` only CREATES payments at Nordea; the bank waits for a payment
+ * authorization before executing them. That request names payments by the ids the BANK assigns, so its
+ * bytes cannot exist until the POST has returned — which is why this is a separate round rather than
+ * part of the bundle approval the holder has already given.
+ *
+ * One gesture, several signatures, exactly as the admin chain does it: a bundle of up to 200 payments
+ * is at most ten requests (the endpoint takes 20 ids each), and all of them are signed here in one
+ * pass while the share is in hand. The holder is never asked to come back per payment.
+ *
+ * The returned visible_payment_authorization is derived from the SIGNED bodies, so the caller displays
+ * what was actually authorized rather than what it was told.
+ */
+export async function signNordeaPaymentSignInputV1(paymentSignInput, phoneSharePackage, options = {}) {
+  assertNoProductionBlindingOverride(options);
+  const share = decodePhoneSharePackageV1(phoneSharePackage);
+  // ONE validation pass, and every digest is computed from the bytes THAT pass returned — never by
+  // re-reading the caller's object, which could change between awaits and leave the holder shown one
+  // set of payments while a different set was signed.
+  const { visiblePaymentAuthorization, signingStringBytes } = await validateNordeaPaymentSignInputV1(
+    paymentSignInput,
+    options.cryptoProvider
+  );
+  const signatures = [];
+  for (const [chunkIndex, bytes] of signingStringBytes.entries()) {
+    const paddedDigest = await emsaPkcs1v15Encode(
+      bytes,
+      modulusByteLength(share.modulus),
+      options.cryptoProvider ?? globalThis.crypto
+    );
+    const signShare = signShareForPaddedDigest({
+      paddedDigest,
+      modulus: share.modulus,
+      shareSi: share.shareSi,
+      shareIndex: share.shareIndex,
+      players: share.players,
+      threshold: share.threshold,
+      blinded: true,
+      cryptoProvider: options.cryptoProvider
+    });
+    signatures.push({
+      chunk_index: chunkIndex,
+      padded_digest: paddedDigest,
+      sign_share: signShare,
+      sign_share_base64url: bytesToBase64url(signShare)
+    });
+  }
+  return {
+    visible_payment_authorization: visiblePaymentAuthorization,
+    signatures
   };
 }

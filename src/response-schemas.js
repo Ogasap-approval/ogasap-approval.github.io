@@ -219,6 +219,53 @@ export const RESPONSE_SCHEMAS = {
       error: { type: "string", minLength: 1, maxLength: 256, pattern: PRINTABLE_ASCII_PATTERN }
     }
   }),
+  // The payment-authorization round. Served on its OWN endpoints rather than added to the bundle
+  // bodies: an added endpoint is simply never called by a cached PWA, while an added field on an
+  // existing body fails additionalProperties:false on every poll from one.
+  pending_payment_sign_response_v1: schema("pending_payment_sign_response_v1", {
+    type: "object",
+    additionalProperties: false,
+    required: ["version", "payment_sign_input"],
+    properties: {
+      version: { const: "pending_payment_sign_response_v1" },
+      suppression: { type: ["string", "null"], maxLength: 64, pattern: "^[a-z_]+$" },
+      // null is the "nothing pending" value and is REQUIRED to be present, for the same reason
+      // admin_input is: an absent key would let a renamed backend field read as "nothing to
+      // authorize" forever rather than failing loudly. The bytes themselves are re-validated by
+      // validateNordeaPaymentSignInputV1 before anything is signed — this schema only gets the body
+      // as far as that check.
+      payment_sign_input: {
+        type: ["object", "null"],
+        additionalProperties: true,
+        required: ["version", "request_id", "method", "path", "requests"],
+        properties: {
+          version: { const: "nordea_payment_sign_input_v1" },
+          request_id: { type: "string", minLength: 8, maxLength: 128, pattern: "^[A-Za-z0-9._:-]+$" },
+          method: { const: "POST" },
+          path: { const: "/corporate/premium/v2/payments/sign" },
+          requests: { type: "array", minItems: 1, maxItems: 10 }
+        }
+      }
+    }
+  }),
+  payment_sign_result_v1: schema("payment_sign_result_v1", {
+    type: "object",
+    additionalProperties: false,
+    required: ["version", "ok", "signed", "still_partial"],
+    properties: {
+      version: { const: "payment_sign_result_v1" },
+      ok: { type: "boolean" },
+      signed: { type: "integer", minimum: 0, maximum: 200 },
+      // The two-together mandate answering: our authorization was accepted and these payments need
+      // another one, which no further signature of ours can supply.
+      still_partial: {
+        type: "array",
+        maxItems: 200,
+        items: { type: "string", minLength: 8, maxLength: 64, pattern: "^[A-Za-z0-9-]+$" }
+      },
+      error: { type: "string", minLength: 1, maxLength: 256, pattern: PRINTABLE_ASCII_PATTERN }
+    }
+  }),
   migration_request_response_v1: schema("migration_request_response_v1", {
     type: "object",
     additionalProperties: false,

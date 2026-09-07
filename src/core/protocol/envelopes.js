@@ -1882,6 +1882,214 @@ export async function paddedNordeaAdminDigestV1(input, modulusByteLength, crypto
   return emsaPkcs1v15Encode(signingStringBytes, modulusByteLength, cryptoProvider);
 }
 
+// =====================================================================================================
+// nordea_payment_sign_input_v1 — authorizing payments the bank has ALREADY created.
+// =====================================================================================================
+//
+// Submitting a payment to Nordea is two steps. `POST /corporate/premium/v2/payments` creates it; the
+// bank then waits for a payment authorization before it will execute anything. This envelope carries
+// that second step.
+//
+// It is deliberately NOT a seventh nordea_admin_input_v1 route. That envelope resolves against a hard
+// six-route allowlist covering only Corporate Access and signing-key management, and the payment API is
+// unreachable through it BY DESIGN — an admin envelope can never be made to move money. Widening that
+// table would delete the one structural line between bank housekeeping and payment instructions, so
+// this is its own type with its own allowlist of exactly ONE path.
+//
+// Why it cannot be folded into the approval the holder has already given: the request names payments by
+// the ids the BANK assigns, which do not exist until the POST returns. So these bytes are unknowable at
+// bundle-approval time and this is a second signing round, not a second copy of the first.
+export const NORDEA_PAYMENT_SIGN_PATH = "/corporate/premium/v2/payments/sign";
+
+// SignMultiplePaymentsRequest.payment_id_list has `maxItems: 20` in the Corporate Payout v2 spec, and a
+// bundle may hold up to 200 payments — so one authorization is up to ten signed requests, never more.
+export const NORDEA_PAYMENT_SIGN_MAX_IDS = 20;
+const NORDEA_PAYMENT_SIGN_MAX_REQUESTS = 10;
+
+// A bank-assigned payment id (`_id`, "unique payment identifier assigned for new payment").
+const NORDEA_BANK_PAYMENT_ID = /^[A-Za-z0-9-]{8,64}$/u;
+
+// One request of the set, by name and position — the with-body header block, since this endpoint
+// requires Digest. Reuses the admin block: the two are the same five headers in the same order, and
+// having one definition means a change to the wire format cannot reach one path and miss the other.
+function validateNordeaPaymentSignHeadersV1(headers, bodySha256) {
+  const expectedNames = NORDEA_ADMIN_BODY_HEADER_NAMES;
+  if (!Array.isArray(headers) || headers.length !== expectedNames.length) {
+    throw new RangeError(`Nordea payment sign signed_headers must contain exactly ${expectedNames.length} headers`);
+  }
+  const expectedDigest = `SHA-256=${hexToBase64(bodySha256)}`;
+  return headers.map((header, index) => {
+    assertModeledObject("Nordea payment sign signed header", header, ["name", "value"], []);
+    const { name, value } = header;
+    if (name !== expectedNames[index]) {
+      throw new RangeError(`Nordea payment sign signed header ${index + 1} must be ${expectedNames[index]}`);
+    }
+    if (name === "(request-target)") {
+      if (value !== "") {
+        throw new RangeError("(request-target) signed header value must be empty");
+      }
+      return { name, value };
+    }
+    assertPrintableHeaderValue(`signed header ${name}`, value);
+    // The host allowlist is the same hardcoded pair the admin path uses, and for the same reason: it
+    // must never become configuration, or a Nordea-looking path could be signed for somebody else.
+    if (name === NORDEA_ADMIN_HOST_HEADER && !NORDEA_ADMIN_ORIGINATING_HOSTS.includes(value)) {
+      throw new RangeError(
+        `${NORDEA_ADMIN_HOST_HEADER} must be one of: ${NORDEA_ADMIN_ORIGINATING_HOSTS.join(", ")}`
+      );
+    }
+    if (name === NORDEA_ADMIN_DATE_HEADER && !isNordeaAdminHttpDate(value)) {
+      throw new RangeError(
+        `${NORDEA_ADMIN_DATE_HEADER} must be an IMF-fixdate, e.g. "Mon, 31 Aug 2026 12:00:00 GMT"`
+      );
+    }
+    if (name === "content-type" && value !== ADMIN_JSON_CONTENT_TYPE) {
+      throw new RangeError(`content-type signed header must be ${ADMIN_JSON_CONTENT_TYPE}`);
+    }
+    if (name === "digest" && value !== expectedDigest) {
+      throw new RangeError("digest signed header must match body_sha256");
+    }
+    return { name, value };
+  });
+}
+
+/**
+ * The payment ids one signed body authorizes, read back out of the bytes themselves.
+ *
+ * The body must be EXACTLY `{"payment_id_list": [...]}` — a strict parse, no unmodeled keys, and every
+ * id shaped like a bank id. Anything else is refused rather than displayed: these are the bytes a
+ * holder is about to authorize, and a body we cannot fully account for is one we cannot describe.
+ */
+export function derivePaymentIdsFromSignBodyV1(bodyBytes) {
+  const body = parseAdminJsonBodyV1(bodyBytes);
+  assertModeledObject("payment sign body", body, ["payment_id_list"], []);
+  const ids = body.payment_id_list;
+  if (!Array.isArray(ids) || ids.length < 1 || ids.length > NORDEA_PAYMENT_SIGN_MAX_IDS) {
+    throw new RangeError(`payment_id_list must hold 1..${NORDEA_PAYMENT_SIGN_MAX_IDS} payment ids`);
+  }
+  return ids.map((id) => {
+    if (typeof id !== "string" || !NORDEA_BANK_PAYMENT_ID.test(id)) {
+      throw new RangeError("payment_id_list must contain only Nordea payment ids");
+    }
+    return id;
+  });
+}
+
+/**
+ * What the holder is told they are authorizing — derived from the SIGNED bytes and nothing else.
+ *
+ * Note what is NOT in here: the bundle_id. It travels on the envelope as routing metadata, but it is
+ * not inside any signed body, so it cannot be proven to describe these payments and must not be shown
+ * as though it had been authorized. What the bytes can support is how many payments there are and
+ * which ones, and that is exactly what is returned.
+ */
+export function deriveVisiblePaymentAuthorizationV1(bodies) {
+  const paymentIds = [];
+  const seen = new Set();
+  for (const bodyBytes of bodies) {
+    for (const id of derivePaymentIdsFromSignBodyV1(bodyBytes)) {
+      // The same payment authorized twice in one gesture is a set we cannot describe honestly — the
+      // count would not match the payments.
+      if (seen.has(id)) {
+        throw new RangeError(`payment ${id} appears in more than one sign request`);
+      }
+      seen.add(id);
+      paymentIds.push(id);
+    }
+  }
+  return {
+    action: "payment_sign",
+    payment_count: paymentIds.length,
+    request_count: bodies.length,
+    payment_ids: paymentIds
+  };
+}
+
+function assertNordeaPaymentSignInputShapeV1(input) {
+  assertModeledObject(
+    "Nordea payment sign input",
+    input,
+    ["version", "request_id", "method", "path", "requests"],
+    ["bundle_id", "visible_payment_authorization"]
+  );
+  if (input.version !== "nordea_payment_sign_input_v1") {
+    throw new RangeError("Nordea payment sign input version must be nordea_payment_sign_input_v1");
+  }
+  if (!ID_8_128.test(input.request_id)) {
+    throw new RangeError("Nordea payment sign request_id is malformed");
+  }
+  // ONE path, ONE method. The allowlist is the point of the type.
+  if (input.method !== "POST" || input.path !== NORDEA_PAYMENT_SIGN_PATH) {
+    throw new RangeError(`Nordea payment sign input must be POST ${NORDEA_PAYMENT_SIGN_PATH}`);
+  }
+  if (input.bundle_id !== undefined && !ID_8_128.test(input.bundle_id)) {
+    throw new RangeError("Nordea payment sign bundle_id is malformed");
+  }
+  if (!Array.isArray(input.requests) || input.requests.length < 1
+      || input.requests.length > NORDEA_PAYMENT_SIGN_MAX_REQUESTS) {
+    throw new RangeError(`Nordea payment sign input must carry 1..${NORDEA_PAYMENT_SIGN_MAX_REQUESTS} requests`);
+  }
+  return input.requests.map((request, index) => {
+    assertModeledObject(
+      `Nordea payment sign request ${index + 1}`,
+      request,
+      ["signed_headers", "body_base64url", "body_sha256"],
+      ["chunk_index"]
+    );
+    if (request.chunk_index !== undefined && request.chunk_index !== index) {
+      throw new RangeError(`Nordea payment sign request ${index + 1} is out of order`);
+    }
+    if (typeof request.body_base64url !== "string" || !BASE64URL.test(request.body_base64url)) {
+      throw new RangeError(`Nordea payment sign request ${index + 1} body is not base64url`);
+    }
+    if (typeof request.body_sha256 !== "string" || !HEX_64.test(request.body_sha256)) {
+      throw new RangeError(`Nordea payment sign request ${index + 1} body_sha256 is malformed`);
+    }
+    return request;
+  });
+}
+
+function snapshotNordeaPaymentSignInputV1(input) {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new RangeError("Nordea payment sign input must be an object");
+  }
+  return snapshotAdminValueV1(input, 0);
+}
+
+/**
+ * Validate the whole set and return one signing string per request, in order.
+ *
+ * Same discipline as the admin envelope: snapshot FIRST so a getter on the caller's object cannot
+ * return one thing to the validator and another to the signing string, and refuse a supplied
+ * visible_payment_authorization that disagrees with the bytes rather than preferring it.
+ */
+export async function validateNordeaPaymentSignInputV1(input, cryptoProvider = globalThis.crypto) {
+  const draft = snapshotNordeaPaymentSignInputV1(input);
+  const requests = assertNordeaPaymentSignInputShapeV1(draft);
+  const signingStrings = [];
+  const bodies = [];
+  for (const request of requests) {
+    const headers = validateNordeaPaymentSignHeadersV1(request.signed_headers, request.body_sha256);
+    const bodyBytes = base64urlToBytes(request.body_base64url);
+    if ((await sha256Hex(bodyBytes, cryptoProvider)) !== request.body_sha256) {
+      throw new RangeError("body_sha256 does not match body_base64url");
+    }
+    bodies.push(bodyBytes);
+    signingStrings.push(buildNordeaAdminSigningStringV1(draft.method, draft.path, headers));
+  }
+  const derived = deriveVisiblePaymentAuthorizationV1(bodies);
+  if (draft.visible_payment_authorization !== undefined) {
+    if (stableStringify(draft.visible_payment_authorization) !== stableStringify(derived)) {
+      throw new RangeError("visible_payment_authorization does not match the signed bodies");
+    }
+  }
+  return {
+    signingStrings,
+    signingStringBytes: signingStrings.map((text) => utf8Encode(text)),
+    visiblePaymentAuthorization: derived
+  };
+}
+
 export function validatePollingCapabilityPackageV1(pkg) {
   if (pkg === undefined || pkg === null) {
     return null;
