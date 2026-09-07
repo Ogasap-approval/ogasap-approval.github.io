@@ -2,7 +2,45 @@ import { base64urlToBytes, utf8Decode } from "./core/crypto/bytes.js";
 
 export const POLLING_CAPABILITY_HORIZON_HOURS = 72;
 export const POLLING_CAPABILITY_SLOT_INTERVAL_MINUTES = 60;
-export const POLLING_CAPABILITY_SLOT_OFFSET_MINUTES = 30;
+
+// WHERE THE FIRST READ CAPABILITY IS DATED, and why it is now the approval instant rather than half an
+// hour after it.
+//
+// The phone pre-signs one read GET per hourly slot across the 72h horizon. The service replays the newest
+// slot that has ALREADY OPENED; it never replays a future-dated one, because Nordea refuses those outright
+// (`401 error.date.invalid`, "X-Nordea-Originating-Date header points to date from the future"). So the
+// offset is not a delay before the first read is DUE — it is a span during which no replayable capability
+// exists at all.
+//
+// At 30 it cost half an hour of every payment. `POST /payments` only creates a payment at Nordea; the bank
+// answers PAYMENT_INITIATED and then moves it to AUTHORIZATION_PARTIAL, and nothing tells us it has except
+// a status read. With the first capability dated approval+30min, no read was POSSIBLE for the first half
+// hour, so no authorization could be finished inside it either. A 1 DKK payment on 2026-09-07 took 93
+// minutes from submit to authorized, and this constant owned the first 30 of them.
+//
+// It is 0 rather than a small positive number because a positive offset would buy nothing and cost the
+// same thing again, only smaller. The thing a positive offset might seem to protect against is this
+// phone's clock running ahead of the bank's, which would make slot 0 future-dated and refused — but:
+//
+//   - `approvedAt` is stamped BEFORE the signing batch runs (approval-kernel.js), and this bundle's 72+
+//     threshold signatures take real seconds. By the time the package reaches the service, slot 0 is
+//     already dated in the past by however long that took, and that buffer widens with bundle size.
+//   - The service compares each signed date to ITS OWN clock and silently skips anything still in the
+//     future, so a phone that is ahead produces a slot that is simply not selected yet. Skew becomes
+//     latency, never a rejected read.
+//
+// A positive offset would add to the very quantity those two already handle, and subtract from the window
+// we are trying to open.
+//
+// WHY THIS IS NOT ALSO A DENSER EARLY SCHEDULE. A capability is REPLAYABLE: the same signature answers 200
+// for a long time. Production on 2026-09-07 shows Nordea accepting reads whose signed date was 17, 53 and
+// 83 minutes old. So slot 0 alone covers the entire first hour by replay, and slot 1 opens as it ages —
+// there is no coverage gap for extra slots to fill. Reading OFTEN is a question of how often the service
+// replays the open slot, which is a scheduler cadence and costs no signature; adding early slots would
+// charge the holder's phone more signing time at approval for reads it already has. The density belongs in
+// the cadence, not in the schedule.
+export const POLLING_CAPABILITY_SLOT_OFFSET_MINUTES = 0;
+
 export const POLLING_CAPABILITY_SLOT_COUNT = POLLING_CAPABILITY_HORIZON_HOURS;
 export const POLLING_CAPABILITY_EXTERNAL_ID_CHUNK_SIZE = 20;
 export const DEFAULT_DETERMINISTIC_POLLING_PATHS = [];

@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "ca410b1852607397da3f8ce1a968d8e4eef430ac324506a6a05fb31dc64d2471"
+      "sha256": "659e7caa726d48f9c30a781193818186c6f4a7f3b15973ef8b975a0eb814b212"
     },
     {
       "path": "src/admin-request.js",
@@ -125,7 +125,7 @@
     },
     {
       "path": "src/polling-capabilities.js",
-      "sha256": "6c7cb8e63d53b52bcb5992c4c9593b270fbf1b1011589dbf59ecd8b45ce8aa47"
+      "sha256": "0e28a37f9bd6dcf051f7a04f0f1c14a0b99ae266cd07a8228604173bc7d0c3b5"
     },
     {
       "path": "src/qr-decode.js",
