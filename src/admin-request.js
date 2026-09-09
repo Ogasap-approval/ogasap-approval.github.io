@@ -110,6 +110,28 @@ export function mayAutoSignAdminAction(action) {
 // we are the ones who asked the bank to make them.
 export const BANK_APPROVAL_SUPPRESSION = "awaiting_bank_approval";
 
+// The same sentence, from the payment side. A payment at AUTHORIZATION_PENDING is waiting on this
+// holder in their Nordea ID app: our POST /payments/sign has already been accepted, and no further
+// signature from the service or this phone moves it -- only they can. It is therefore absent from
+// SIGNABLE_PAYMENT_STATUSES, and the app used to answer `nothing_to_sign` for it, which told a
+// holder the queue was empty while the bank waited on them. On 2026-09-09 five real payments sat in
+// that state with nothing on screen.
+//
+// It earns the panel on the same terms as the admin wait, and by the same rule: a person has to act,
+// and we are the ones who sent the request that made them. Both halves come from the bank's own
+// answer -- a status read -- not from a guess about where the flow has got to.
+export const PAYMENT_AUTHORIZATION_SUPPRESSION = "awaiting_payment_authorization";
+
+/**
+ * Is a payment this holder approved waiting on their Nordea ID app?
+ *
+ * Takes the reason the payment-authorization round last reported. Anything else -- including
+ * `nothing_to_sign`, the ordinary resting state -- is false.
+ */
+export function paymentAuthorizationIsOutstanding(reason) {
+  return reason === PAYMENT_AUTHORIZATION_SUPPRESSION;
+}
+
 // The identity of the bank-approval prompt, so "Not now" can retire it the way it retires a request.
 // It cannot collide with a request identity (always `signed:` or `unverified:` prefixed) nor with a
 // suppression banner (`suppressed:`).

@@ -16,6 +16,8 @@ import {
   bankApprovalIsOutstanding,
   createAdminRequestController,
   mayAutoSignAdminAction,
+  PAYMENT_AUTHORIZATION_SUPPRESSION,
+  paymentAuthorizationIsOutstanding,
   unrecognisedRequestNeedsHolder
 } from "./admin-request.js";
 import { authorizePendingPayments } from "./approval-kernel.js";
@@ -134,6 +136,10 @@ const ids = [
 ];
 const els = Object.fromEntries(ids.map((id) => [id, document.querySelector(`#${id}`)]));
 const state = {
+  // The reason the payment-authorization round last stopped, or null. Read only through
+  // paymentAuthorizationIsOutstanding — "nothing to sign" and "the bank is waiting on you" arrive on
+  // the same channel and must not be conflated again.
+  paymentAuthorizationReason: null,
   phoneSharePackage: null,
   webauthnCredential: null,
   storagePersistent: null,
@@ -1865,6 +1871,10 @@ const ADMIN_SUPPRESSION_TEXT = Object.freeze({
   // a timer, never inferred from which step we think we are on — so a holder who reads it can trust
   // that there is genuinely a prompt sitting in their Nordea ID app.
   awaiting_bank_approval: "The bank is waiting for you to approve in your Nordea ID app. Open it and approve there — everything else happens by itself, and this will clear on its own once the bank has your approval.",
+  // THE PAYMENT SIDE OF THE SAME SENTENCE. Deliberately says the money is already at the bank, and
+  // that no further approval is wanted HERE -- a holder who has just approved a bundle and then sees
+  // a second "approve" prompt needs to know it is not asking them to release the payment twice.
+  awaiting_payment_authorization: "A payment you approved is waiting for you to authorize it in your Nordea ID app. It has already been sent to the bank; open the app and approve it there. Nothing further is needed in this app, and this will clear on its own.",
   // Kept for a service that has not been updated yet: the ceiling that produced it no longer exists
   // (a step that keeps failing now throttles and alerts rather than stopping), but a rolled-back
   // backend must not render a raw state name at the one person who can act on it.
@@ -2068,7 +2078,12 @@ function renderAdminRequest() {
   // is the only thing that put the panel on screen. It cannot compete with the prompt: the predicate
   // yields to `bankApprovalWaiting`, so at most one of these is ever true.
   const anomaly = !waiting && unrecognisedRequestNeedsHolder(snap);
-  const holderNeeded = waiting || anomaly;
+  // THE THIRD CONDITION, and the same sentence as the first. A payment waiting on this holder's
+  // Nordea ID app asks for exactly what the admin wait asks for -- go and open that app -- so it
+  // raises the same panel rather than a competing one. It is read through a predicate for the same
+  // reason the other two are: the renderer must not be the place that decides.
+  const paymentWaiting = paymentAuthorizationIsOutstanding(state.paymentAuthorizationReason);
+  const holderNeeded = waiting || paymentWaiting || anomaly;
   els.adminRequestPanel?.classList.toggle("hidden", !holderNeeded);
   // Panel and takeover read the SAME value, and that is load-bearing rather than tidy. A panel that
   // could be up without owning the view would put a bank request and a payment release side by side
@@ -2124,7 +2139,11 @@ function renderAdminRequest() {
   els.approveAdminRequestButton.disabled = true;
   els.approveAdminRequestButton.textContent = DEFAULT_ADMIN_BUTTON_LABEL;
 
-  const rows = [["Status", ADMIN_SUPPRESSION_TEXT[BANK_APPROVAL_SUPPRESSION]]];
+  // Both waits say "open your Nordea ID app"; the line below says WHICH is waiting. A holder with
+  // both outstanding needs one trip to the same app, so they share one panel rather than queueing.
+  const rows = [["Status", ADMIN_SUPPRESSION_TEXT[
+    waiting ? BANK_APPROVAL_SUPPRESSION : PAYMENT_AUTHORIZATION_SUPPRESSION
+  ]]];
   for (const [label, value] of rows) {
     const wrap = document.createElement("div");
     const dt = document.createElement("dt");
@@ -2253,6 +2272,13 @@ async function recoverPendingPaymentAuthorization() {
     // Silent by design: the backend alerts on a payment left waiting, and that is the channel for it.
     return;
   }
+  // WHY THIS IS RECORDED AT ALL. `authorized: false` covers two very different things: the ordinary
+  // "nothing to sign", and "the bank is waiting on this holder in their Nordea ID app". The second
+  // used to be indistinguishable from the first, so the app showed an empty queue while five real
+  // payments waited on somebody. Kept as the raw reason and read through a predicate, so the renderer
+  // decides nothing.
+  state.paymentAuthorizationReason = outcome.authorized ? null : (outcome.reason ?? null);
+  renderAdminRequest();
   if (!outcome.authorized) {
     return;
   }
