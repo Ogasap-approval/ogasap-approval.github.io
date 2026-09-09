@@ -233,6 +233,10 @@ function appendPaymentRows(target, payments) {
   for (const payment of payments) {
     const row = document.createElement("tr");
     row.append(
+      // The funding account, masked by the protocol (reg code + last four, e.g. "2000...9922").
+      // deriveVisiblePaymentFromBankBodyV1 derives it from the SIGNED body, so what is shown here is
+      // the account the bank will actually debit -- not a field the server asserted alongside it.
+      cell(payment.debtor_account_masked || "-"),
       cell(payment.creditor_account || "-"),
       cell(payment.remittance_text || "-"),
       cell(amountMinorToDecimal(payment.amount_minor, payment.currency), "numeric")

@@ -137,7 +137,8 @@
               <table>
                 <thead>
                   <tr>
-                    <th scope="col">Account</th>
+                    <th scope="col">From</th>
+                    <th scope="col">To</th>
                     <th scope="col">Text</th>
                     <th scope="col" class="numeric">Amount</th>
                   </tr>
@@ -173,7 +174,13 @@
                authorized. Hidden entirely when the service sends no progress, so a backend that
                predates the field renders exactly as it does today. -->
           <p class="status-line admin-flow-progress hidden" id="adminRequestProgress" aria-live="polite"></p>
-          <p class="status-line">Approving this authorizes a change at Nordea and continues the setup through the steps that follow &mdash; each one is shown here as it is signed. Check every line before you approve.</p>
+          <!-- The panel is raised by ONE thing: the bank telling us it is waiting for a human in the
+               Nordea ID app, in answer to the request we sent to make it wait. So the standing copy
+               describes that and only that. It used to explain what approving HERE would authorize,
+               which was written for a panel that appeared for every step of the setup — and it read
+               as an instruction to tap something on this screen while the sentence below it was
+               asking the holder to go and act in another app entirely. -->
+          <p class="status-line">Nothing is approved on this screen. The approval happens in your Nordea ID app; everything this service needs to do afterwards is signed here automatically.</p>
           <dl class="metadata-list" id="adminRequestDetails"></dl>
           <div class="button-row">
             <button id="approveAdminRequestButton" type="button">Approve bank request</button>

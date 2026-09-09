@@ -104,29 +104,36 @@ export function mayAutoSignAdminAction(action) {
   return typeof action?.action === "string" && AUTO_SIGN_SET.has(action.action);
 }
 
-// Does a panel state actually ask the holder to DO something?
+// The service's one word for "somebody has to open their Nordea ID app". It is written from the
+// bank's own answer to the request that starts that approval and cleared by the answer that says the
+// wait is over, so it is evidence of both halves of what the panel claims: a human has to act, and
+// we are the ones who asked the bank to make them.
+export const BANK_APPROVAL_SUPPRESSION = "awaiting_bank_approval";
+
+// The identity of the bank-approval prompt, so "Not now" can retire it the way it retires a request.
+// It cannot collide with a request identity (always `signed:` or `unverified:` prefixed) nor with a
+// suppression banner (`suppressed:`).
+const BANK_APPROVAL_IDENTITY = "bank_approval";
+
+// IS THE BANK PANEL ALLOWED ON SCREEN? One condition, and this is the whole of it.
 //
-// Kept here rather than in the renderer because it is a rule, not a layout: it decides whether the
-// bank panel takes the whole approval view to itself, hiding the payment queue underneath it.
+// The panel exists for a single purpose: telling a person to go and act in their Nordea ID app. It
+// had drifted into being a status display for the bank-setup flow as a whole — and a status display
+// carrying a warning badge is a prompt whether or not it is meant as one. So a holder saw it during
+// ordinary background signing, saw it say "nothing to approve", and learned to skim the one panel
+// that will later tell them something they genuinely have to act on.
 //
-// The rule changed with auto-signing, and it had to. It used to be "there is a derived action" —
-// i.e. a bank request waiting for a tap. Those are signed in the background now and flash past in a
-// second or two, so keying the takeover on them would blank the payment queue at random on behalf
-// of a process that wants nothing. Two states are left that genuinely want a person:
+// The panel therefore shows when the bank is waiting on a human and at no other time. Not for a
+// request being signed in the background (nothing is wanted, and it is over in a second or two), not
+// for a backoff, not for a finished setup, not for an error.
 //
-//   - the bank is waiting for them in the Nordea ID app. The only real request in the flow, and it
-//     is reported only when the bank itself has said so.
-//   - a request arrived that this build cannot verify, or is not allowed to sign unattended. That
-//     is an anomaly, and a human reading it is exactly what the fallback panel is for.
-//
-// Everything else — a step being signed, a backoff, a finished setup — is a progress note, and a
-// progress note does not get to suspend a payment that is genuinely waiting.
-export function adminRequestNeedsAHuman(snapshot) {
-  if (!snapshot?.visible) return false;
-  if (snapshot.suppression) return snapshot.suppression === "awaiting_bank_approval";
-  // `canApprove` is deliberately NOT consulted: it goes false for the duration of a chain, which is
-  // precisely when a panel a human is needed for must stay in front of everything else.
-  return !snapshot.autoSignable;
+// `canApprove` and `error` are deliberately NOT consulted, and that they were is the defect: both
+// describe a request in flight, and neither says anything about whether a person is being waited on.
+// Nothing this build may not sign unattended is signed unattended — that is enforced by `accept` on
+// the chain and by mayAutoSignAdminAction, never by this panel — such a request simply stops
+// appearing here and reaches an operator through the service's own alerting instead.
+export function bankApprovalIsOutstanding(snapshot) {
+  return Boolean(snapshot?.bankApprovalWaiting);
 }
 
 export function createAdminRequestController({ fetchPendingAdminRequest, validateAdminInput }) {
@@ -148,6 +155,14 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
   // on purpose: `current` is the owned request tuple that approve() reads and dismiss() binds to, and
   // a suppression is not a request — it has no input, no action, and nothing signable.
   let suppression = null;
+  // WHETHER THE BANK IS WAITING ON A HUMAN, tracked apart from `suppression` because the two are
+  // simultaneously true and the old code could only hold one of them. The service confirms the wait
+  // by polling the bank every fifteen seconds, and it mints that poll for this phone to sign — so a
+  // pending request is the NORMAL condition during a wait, not evidence that it is over. Folding the
+  // prompt into `suppression`, which is nulled the moment a request commits, is what took it off the
+  // screen of somebody the bank was still waiting for, every fifteen seconds, for as long as it
+  // waited.
+  let bankWaiting = false;
   // Held OUTSIDE `current` for the same reason `suppression` is, and one more: this is the only
   // field that must survive `current === null`, because the screen that most needs a step counter
   // is the one with nothing to approve.
@@ -162,18 +177,26 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
       try {
         fetched = await fetchPendingAdminRequest();
       } catch {
-        if (startedAt === generation) { current = null; error = ""; suppression = null; flowProgress = null; }
+        if (startedAt === generation) {
+          current = null; error = ""; suppression = null; bankWaiting = false; flowProgress = null;
+        }
         return;
       }
       // An ENVELOPE — { adminInput, suppression } — destructured explicitly rather than sniffed, so a
       // fetcher returning the wrong shape reads as "nothing pending" loudly rather than silently.
       const input = fetched?.adminInput ?? null;
       const why = typeof fetched?.suppression === "string" ? fetched.suppression : null;
+      // Read on EVERY path, including the ones that commit a request. `suppression` is nulled when a
+      // request commits, because a request is not a suppression; the bank's wait is a fact about the
+      // world that the arrival of a request to sign does not change.
+      const waiting = why === BANK_APPROVAL_SUPPRESSION;
       const progress = ownProgress(fetched?.flowProgress);
       if (!input) {
         // A suppression is only meaningful as the NEWEST answer, so it is written under the same
         // generation guard as everything else.
-        if (startedAt === generation) { current = null; error = ""; suppression = why; flowProgress = progress; }
+        if (startedAt === generation) {
+          current = null; error = ""; suppression = why; bankWaiting = waiting; flowProgress = progress;
+        }
         return;
       }
 
@@ -188,6 +211,7 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
           current = null;
           error = "This request could not be read and cannot be approved.";
           suppression = null;
+          bankWaiting = waiting;
           flowProgress = progress;
         }
         return;
@@ -199,6 +223,7 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
         current = deepFreeze({ input: owned, action: visibleAdminAction, identity: identityFor(signingString, owned) });
         error = "";
         suppression = null;
+        bankWaiting = waiting;
         flowProgress = progress;
       } catch (validationError) {
         if (startedAt !== generation) return;
@@ -207,35 +232,65 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
         current = deepFreeze({ input: owned, action: null, identity: identityFor(null, owned) });
         error = validationError.message;
         suppression = null;
+        bankWaiting = waiting;
         flowProgress = progress;
       }
     },
 
     snapshot() {
+      // THE PROMPT, and it is orthogonal to everything else here. `visible`, `canApprove` and
+      // `autoSignable` describe a request this phone may have to sign; this describes a person the
+      // bank is waiting for. Both can be true at once — that is the ordinary condition during a wait,
+      // because the request being signed IS the poll asking whether the person has acted yet — so it
+      // rides on every snapshot rather than occupying the one slot a suppression would.
+      const bankApprovalWaiting = bankWaiting && dismissedIdentity !== BANK_APPROVAL_IDENTITY;
+      // A live request first: it is what the caller signs, and it must keep its own fields whatever
+      // the bank is or is not waiting for.
+      if (current && current.identity !== dismissedIdentity) {
+        return {
+          visible: true,
+          action: current.action,
+          error,
+          // Never approvable without a derived meaning, and never while an approval is already running.
+          canApprove: Boolean(current.action) && !approving,
+          // Whether the caller may sign this in the background. Derived from the SAME action object
+          // the panel would render, so "what is shown" and "what may go unshown" cannot disagree. An
+          // unverifiable request is never auto-signable, because it has no derived action at all.
+          autoSignable: mayAutoSignAdminAction(current.action),
+          suppression: null,
+          bankApprovalWaiting,
+          identity: current.identity,
+          flowProgress
+        };
+      }
+      // The bank's wait outlives the request that confirmed it. Reported even when the last poll
+      // minted nothing, which is most of the time: the flow only asks the bank once every fifteen
+      // seconds, and the fourteen seconds in between are not evidence that anybody has acted.
+      if (bankApprovalWaiting) {
+        return {
+          visible: true, action: null, error: "", canApprove: false,
+          suppression: BANK_APPROVAL_SUPPRESSION, bankApprovalWaiting: true,
+          identity: BANK_APPROVAL_IDENTITY, autoSignable: false, flowProgress
+        };
+      }
       // Visible, with its reason, never approvable — the same shape as an underivable request above,
       // and for the same reason: silently showing nothing leaves the one person who can act on this
       // unable to tell "no work" from "the flow gave up", which is exactly how it deadlocked.
-      if (!current && suppression) {
+      //
+      // It no longer puts the PANEL up (see bankApprovalIsOutstanding); it is what ends a chain as a
+      // success and what the status line reads for the two reasons that need an operator.
+      if (suppression) {
         const identity = `suppressed:${suppression}`;
         if (identity !== dismissedIdentity) {
-          return { visible: true, action: null, error: "", canApprove: false, suppression, identity, autoSignable: false, flowProgress };
+          return {
+            visible: true, action: null, error: "", canApprove: false, suppression, identity,
+            bankApprovalWaiting: false, autoSignable: false, flowProgress
+          };
         }
       }
-      if (!current || current.identity === dismissedIdentity) {
-        return { visible: false, action: null, error: "", canApprove: false, suppression: null, autoSignable: false, flowProgress };
-      }
       return {
-        visible: true,
-        action: current.action,
-        error,
-        // Never approvable without a derived meaning, and never while an approval is already running.
-        canApprove: Boolean(current.action) && !approving,
-        // Whether the caller may sign this in the background. Derived from the SAME action object
-        // the panel would render, so "what is shown" and "what may go unshown" cannot disagree. An
-        // unverifiable request is never auto-signable, because it has no derived action at all.
-        autoSignable: mayAutoSignAdminAction(current.action),
-        suppression: null,
-        flowProgress
+        visible: false, action: null, error: "", canApprove: false, suppression: null,
+        bankApprovalWaiting: false, autoSignable: false, flowProgress
       };
     },
 
@@ -283,6 +338,12 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
     },
 
     dismiss() {
+      // RETIRE WHAT IS ON SCREEN. The bank-approval prompt is the only thing the panel renders now,
+      // so it is the only thing "Not now" can be aimed at — and it has to outrank a pending request
+      // here exactly as it does in the renderer. Binding to the request instead would dismiss
+      // something the holder cannot see, and put the prompt they CAN see straight back up on the
+      // next poll under a new request identity.
+      if (bankWaiting) { dismissedIdentity = BANK_APPROVAL_IDENTITY; return; }
       if (current) { dismissedIdentity = current.identity; return; }
       // `suppressed:<reason>` cannot collide with a request identity, which is always `signed:` or
       // `unverified:` prefixed.
@@ -295,6 +356,7 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
       current = null;
       error = "";
       suppression = null;
+      bankWaiting = false;
       flowProgress = null;
       dismissedIdentity = "";
     },

@@ -11,7 +11,12 @@ import { decodeEncryptedBackupQrV1, encryptBackupQrV1, validateEncryptedBackupQr
 import { utf8Decode } from "./core/crypto/bytes.js";
 import { decodePhoneSharePackageV1, signNordeaAdminInputV1 } from "./core/protocol/signing.js";
 import { validateNordeaAdminSigningInputV1 } from "./core/protocol/envelopes.js";
-import { adminRequestNeedsAHuman, createAdminRequestController, mayAutoSignAdminAction } from "./admin-request.js";
+import {
+  BANK_APPROVAL_SUPPRESSION,
+  bankApprovalIsOutstanding,
+  createAdminRequestController,
+  mayAutoSignAdminAction
+} from "./admin-request.js";
 import { authorizePendingPayments } from "./approval-kernel.js";
 import {
   createMultipartReassembler,
@@ -744,6 +749,9 @@ function renderPaymentRows(target, payments) {
   for (const payment of payments) {
     const row = document.createElement("tr");
     row.append(
+      // Falls back to "-" for a bundle approved before the debtor account was carried through, so
+      // old history stays renderable rather than showing an empty column.
+      cell(payment.debtor_account_masked || "-"),
       cell(payment.creditor_account || "-"),
       paymentTextCell(payment),
       cell(amountMinorToDecimal(payment.amount_minor ?? "0", payment.currency ?? ""), "numeric")
@@ -757,6 +765,7 @@ function visiblePaymentsFromApproval(approval) {
     return [];
   }
   return approval.visible_payments.map((payment) => ({
+    debtor_account_masked: payment?.debtor_account_masked ?? "",
     creditor_account: payment?.creditor_account ?? "",
     remittance_text: payment?.remittance_text ?? "",
     amount_minor: payment?.amount_minor ?? "0",
@@ -2045,54 +2054,40 @@ function adminDetailRows(action) {
 
 function renderAdminRequest() {
   const snap = adminRequests.snapshot();
-  els.adminRequestPanel?.classList.toggle("hidden", !snap.visible);
-  // A request that asks the holder for a DECISION takes the view to itself; the payment queue and
-  // the kernel frame below it are hidden for as long as it is up (the rule lives in styles.css).
-  els.approvalView?.classList.toggle("admin-request-only", adminRequestNeedsAHuman(snap));
-  if (!snap.visible || !els.adminRequestDetails) return;
+  // THE ONE CONDITION. The panel says one thing — "go and act in your Nordea ID app" — and the only
+  // state that may put it on screen is the service reporting that the bank, having been sent the
+  // request that starts that approval, is waiting for exactly that. Everything else this flow does
+  // is signed in the background and shows nothing at all: a request in flight, a backoff, a finished
+  // setup, an error the service will retry or alert on. None of them wants anything from the person
+  // holding the phone, and a panel that appears for them is a panel that gets skimmed past on the
+  // day it matters.
+  const waiting = bankApprovalIsOutstanding(snap);
+  els.adminRequestPanel?.classList.toggle("hidden", !waiting);
+  // The prompt takes the view to itself; the payment queue and the kernel frame below it are hidden
+  // for as long as it is up (the rule lives in styles.css).
+  els.approvalView?.classList.toggle("admin-request-only", waiting);
+  if (!waiting || !els.adminRequestDetails) return;
   els.adminRequestDetails.replaceChildren();
 
-  // Rendered for BOTH panel states. The suppression screen is the one that most needs it: "Nothing
-  // to approve" on its own is what sent a holder looking for a request that had already moved on to
-  // the bank's own app.
+  // Where the setup has got to. This is the screen that most needs it: "the bank is waiting for you"
+  // with no sense of how much is left is how a holder ends up asking whether it has stalled.
   renderFlowProgress(snap.flowProgress);
 
-  // Approvable only when the controller derived a meaning. A live button beside an empty panel is
-  // how a holder ends up signing something they were shown nothing about.
-  els.adminRequestBadge.textContent = snap.suppression
-    ? (snap.suppression === "awaiting_bank_approval" ? "Approve in Nordea ID" : "Nothing to approve")
-    // An auto-signable request is being handled right now and asks for nothing; saying "awaiting
-    // approval" over a button nobody needs to press is how a screen teaches people to press it.
-    : (snap.autoSignable ? "Signing automatically" : (snap.canApprove ? "Awaiting approval" : "Cannot verify"));
-  // Amber means "you", and nothing else. A warning-styled badge over "Nothing to approve", under a
-  // heading that says "request", is three signals disagreeing — and the holder learns to skim the one
-  // panel that will later tell them to open their Nordea ID app. So the styling and the heading follow
-  // the state: attention only when a person is actually being asked for something.
-  const needsHolder = snap.suppression
-    ? snap.suppression === "awaiting_bank_approval"
-    : (!snap.autoSignable && (snap.canApprove || Boolean(snap.error)));
-  els.adminRequestBadge.className = needsHolder ? "badge badge-warn" : "badge badge-ok";
-  els.adminRequestTitle.textContent = needsHolder ? "Bank admin request" : "Bank access";
-  // Hidden for anything the app signs by itself: a live button beside a request already being
-  // handled invites a second, competing gesture, and the controller would refuse it as
-  // already_approving — a confusing answer to a reasonable action.
-  els.approveAdminRequestButton.hidden = snap.autoSignable || Boolean(snap.suppression);
-  els.approveAdminRequestButton.disabled = !snap.canApprove;
-  // Keyed on the DERIVED action, like every other line on this panel — never on anything the
-  // backend merely asserts. An unrecognised action falls back to the generic label rather than
-  // guessing a verb for something we could not identify.
-  els.approveAdminRequestButton.textContent = snap.canApprove
-    ? (ADMIN_ACTION_BUTTON_LABELS[snap.action?.action] ?? DEFAULT_ADMIN_BUTTON_LABEL)
-    : DEFAULT_ADMIN_BUTTON_LABEL;
+  // Amber means "you", and here it always does — the panel is only ever up because a person is being
+  // asked for something. That is the point of gating it this tightly: the badge no longer has to
+  // argue about which of several states it is in, because there is only one.
+  els.adminRequestBadge.textContent = "Approve in Nordea ID";
+  els.adminRequestBadge.className = "badge badge-warn";
+  els.adminRequestTitle.textContent = "Approve in your Nordea ID app";
+  // Nothing is signed HERE. The approval this panel asks for happens in the bank's own app, and
+  // whatever the service still needs a threshold signature for — including the status polls that
+  // ask whether the holder has approved yet — is signed in the background. A live button on this
+  // screen would offer a gesture that does none of what the sentence above it asks for.
+  els.approveAdminRequestButton.hidden = true;
+  els.approveAdminRequestButton.disabled = true;
+  els.approveAdminRequestButton.textContent = DEFAULT_ADMIN_BUTTON_LABEL;
 
-  const rows = snap.suppression
-    ? [["Status", ADMIN_SUPPRESSION_TEXT[snap.suppression] ?? `The service is not asking for anything right now (${snap.suppression}).`]]
-    : (snap.canApprove
-      // Still every field of the derived action, auto-signed or not. What the app signs on a
-      // holder's behalf is not a thing they are forbidden to read — and when a chain stalls, this
-      // is the only place that says which request it stalled on.
-      ? adminDetailRows(snap.action)
-      : [["Refused", snap.error || "This request could not be verified and cannot be approved."]]);
+  const rows = [["Status", ADMIN_SUPPRESSION_TEXT[BANK_APPROVAL_SUPPRESSION]]];
   for (const [label, value] of rows) {
     const wrap = document.createElement("div");
     const dt = document.createElement("dt");
