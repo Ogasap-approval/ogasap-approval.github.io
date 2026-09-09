@@ -136,6 +136,36 @@ export function bankApprovalIsOutstanding(snapshot) {
   return Boolean(snapshot?.bankApprovalWaiting);
 }
 
+/**
+ * A live request this phone will NOT sign unattended, and that nobody is being asked for in the
+ * Nordea ID app either. The escape hatch, and the only other thing that may raise a panel.
+ *
+ * Everything this flow does today is auto-signable — the six actions in ADMIN_AUTO_SIGN_ACTIONS
+ * plus the payment-authorization round — so in normal operation this is never true. It becomes true
+ * for exactly the case the allowlist exists to catch: an action this build does not recognise,
+ * because Nordea added a route or we wired one we had not modelled (POST /payments/{id}/verify is
+ * in the spec and has never been called from here), or a request whose meaning could not be derived
+ * from its bytes at all.
+ *
+ * Without this the flow stalls with nothing on screen. The service alerts `admin_flow_stalled`, but
+ * that is a log line nobody is watching at the moment a holder is standing there wondering why the
+ * app is idle. Two conditions keep it from becoming the panel that cried wolf:
+ *
+ *   - `bankApprovalWaiting` wins. If the bank is waiting on a person, that is the more specific and
+ *     more actionable statement, and the two must never argue on one screen.
+ *   - `autoSignable` excludes it. A request being signed in the background wants nothing from
+ *     anybody and must stay invisible, which is the whole point of the gating around it.
+ *
+ * A suppression snapshot is not a request — it carries `suppression` and no action — so it is
+ * excluded too, and stays what it already was: a status line, not a prompt.
+ */
+export function unrecognisedRequestNeedsHolder(snapshot) {
+  if (!snapshot?.visible) return false;
+  if (snapshot.bankApprovalWaiting) return false;
+  if (snapshot.suppression) return false;
+  return snapshot.autoSignable !== true;
+}
+
 export function createAdminRequestController({ fetchPendingAdminRequest, validateAdminInput }) {
   if (typeof fetchPendingAdminRequest !== "function" || typeof validateAdminInput !== "function") {
     throw new TypeError("createAdminRequestController requires fetchPendingAdminRequest and validateAdminInput");

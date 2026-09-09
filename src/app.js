@@ -15,7 +15,8 @@ import {
   BANK_APPROVAL_SUPPRESSION,
   bankApprovalIsOutstanding,
   createAdminRequestController,
-  mayAutoSignAdminAction
+  mayAutoSignAdminAction,
+  unrecognisedRequestNeedsHolder
 } from "./admin-request.js";
 import { authorizePendingPayments } from "./approval-kernel.js";
 import {
@@ -2062,12 +2063,48 @@ function renderAdminRequest() {
   // holding the phone, and a panel that appears for them is a panel that gets skimmed past on the
   // day it matters.
   const waiting = bankApprovalIsOutstanding(snap);
-  els.adminRequestPanel?.classList.toggle("hidden", !waiting);
-  // The prompt takes the view to itself; the payment queue and the kernel frame below it are hidden
-  // for as long as it is up (the rule lives in styles.css).
-  els.approvalView?.classList.toggle("admin-request-only", waiting);
-  if (!waiting || !els.adminRequestDetails) return;
+  // THE SECOND CONDITION, and deliberately a different sentence. A request this build will not sign
+  // unattended has to reach a person somehow; before this it reached nobody, because the gate above
+  // is the only thing that put the panel on screen. It cannot compete with the prompt: the predicate
+  // yields to `bankApprovalWaiting`, so at most one of these is ever true.
+  const anomaly = !waiting && unrecognisedRequestNeedsHolder(snap);
+  const holderNeeded = waiting || anomaly;
+  els.adminRequestPanel?.classList.toggle("hidden", !holderNeeded);
+  // Panel and takeover read the SAME value, and that is load-bearing rather than tidy. A panel that
+  // could be up without owning the view would put a bank request and a payment release side by side
+  // — and the anomaly panel carries a live Approve button, so it is exactly the pairing this
+  // arrangement exists to prevent. A stuck admin request blocking the payment queue is the cheaper
+  // failure: it is rare, it is loud, and it cannot be mistaken for authorising money.
+  els.approvalView?.classList.toggle("admin-request-only", holderNeeded);
+  if (!holderNeeded || !els.adminRequestDetails) return;
   els.adminRequestDetails.replaceChildren();
+
+  if (anomaly) {
+    renderFlowProgress(snap.flowProgress);
+    els.adminRequestBadge.textContent = "Needs review";
+    els.adminRequestBadge.className = "badge badge-warn";
+    els.adminRequestTitle.textContent = "Bank request this app does not recognise";
+    // Approvable only when the meaning could be DERIVED from the bytes. An unverifiable request has
+    // no action at all, and `canApprove` is already false for it — it is shown so somebody knows the
+    // flow has stopped, never so they can wave it through.
+    els.approveAdminRequestButton.hidden = false;
+    els.approveAdminRequestButton.disabled = !snap.canApprove;
+    els.approveAdminRequestButton.textContent =
+      ADMIN_ACTION_BUTTON_LABELS[snap.action?.action] ?? DEFAULT_ADMIN_BUTTON_LABEL;
+    const detail = snap.action
+      ? adminDetailRows(snap.action)
+      : [["Status", snap.error || "This request could not be verified on this device."]];
+    for (const [label, value] of detail) {
+      const wrap = document.createElement("div");
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.textContent = value;
+      wrap.append(dt, dd);
+      els.adminRequestDetails.append(wrap);
+    }
+    return;
+  }
 
   // Where the setup has got to. This is the screen that most needs it: "the bank is waiting for you"
   // with no sense of how much is left is how a holder ends up asking whether it has stalled.
