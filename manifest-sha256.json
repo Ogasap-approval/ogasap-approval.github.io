@@ -9,11 +9,11 @@
     },
     {
       "path": "index.html",
-      "sha256": "a725b7d44ec0e20b1187055e654483d45bae96125c82e278e74ed9b9074bc1d3"
+      "sha256": "0fb8f9d244cfe4434749d6f77274fd79528c07c94f7849863c4aec68ac86c85c"
     },
     {
       "path": "kernel.html",
-      "sha256": "3051cce5a515d722aef713586e613922b7239faf9b4b66a57ef3efbe644ae0c9"
+      "sha256": "ab085e1644a3ee785e1af4537b94899bb0f32f6d862335d704571c63bb4589ac"
     },
     {
       "path": "manifest.webmanifest",
@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "baad446589f545b9e937a5c413ae6663e819a0bc65fd9416b479081a6aa76761"
+      "sha256": "3cce8db568220c15307a3cd7efe1c9383f5ad83487df6022e318d1b915f43f1b"
     },
     {
       "path": "src/admin-request.js",
@@ -33,7 +33,7 @@
     },
     {
       "path": "src/app.js",
-      "sha256": "ea73f8272e77a997e417583833f4067e26b48bc93f12627246daa478c26f74b8"
+      "sha256": "6675659f33940dd028289f160af1c988f20dcc6e78574cb60e97aa7094592af8"
     },
     {
       "path": "src/approval-kernel.js",
@@ -53,7 +53,7 @@
     },
     {
       "path": "src/bootstrap.js",
-      "sha256": "6af5c36aa342afbac595a50ca361110a438651fc4b128939e32ece7184712358"
+      "sha256": "e193b74a1902b08b3d4089e31457d9635dd97271a3d7029d2eea240dfd19e76b"
     },
     {
       "path": "src/core/crypto/bigint.js",
@@ -109,7 +109,7 @@
     },
     {
       "path": "src/integrity.js",
-      "sha256": "607b08f75a0e930952d0482ce1d21667bf5efb4264bfb8778b8a78bc7cb0f78e"
+      "sha256": "a7c2b0b9ec460f79251a203f5c6fafb433d12815a4bf20f0c44d4c13653762d1"
     },
     {
       "path": "src/json-schema-validate.js",
@@ -117,7 +117,11 @@
     },
     {
       "path": "src/kernel-frame.js",
-      "sha256": "4d375d720c02f6076c9239d8af5b40a3fd163d86d9d43990aaf467953226cc50"
+      "sha256": "ab9cab249026cbe279abab3562c7f0f6dfd75770a2ef878ab71fd122b7f92cf6"
+    },
+    {
+      "path": "src/payment-grouping.js",
+      "sha256": "33680b4341dd28e8d876247e48ce30b628bb798738018f804f4958679e2855db"
     },
     {
       "path": "src/payment-view.js",

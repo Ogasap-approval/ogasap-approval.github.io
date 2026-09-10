@@ -26,6 +26,7 @@ export const APP_INTEGRITY_GRAPH = [
   "src/integrity.js",
   "src/json-schema-validate.js",
   "src/kernel-frame.js",
+  "src/payment-grouping.js",
   "src/payment-view.js",
   "src/response-schemas.js",
   "src/polling-capabilities.js",

@@ -1,7 +1,8 @@
 import { approveReviewedBundle, authorizePendingPayments } from "./approval-kernel.js";
 import { isTrustedFrameMessage } from "./frame-messaging.js";
 import { loadIntegrityManifest } from "./integrity.js";
-import { amountMinorToDecimal, deriveVisiblePaymentFromInput } from "./payment-view.js";
+import { buildBundleRowModel, paymentCountMetricText } from "./payment-grouping.js";
+import { amountMinorToDecimal } from "./payment-view.js";
 import { validateBundleForApprovalV1 } from "./core/protocol/envelopes.js";
 
 // The approval shell embeds this kernel from the same origin, so outbound
@@ -269,7 +270,10 @@ function renderBundle() {
   }
 
   els.bundleSummary.textContent = bundle.bundle_id;
-  els.bundleCountValue.textContent = String(bundle.payment_inputs.length);
+  // Split payouts collapse into one row, so this counts PAYMENTS and names the bank instructions
+  // separately -- "2 (3 transfers)" -- rather than silently disagreeing with the rows on screen.
+  const model = buildBundleRowModel(bundle.payment_inputs);
+  els.bundleCountValue.textContent = paymentCountMetricText(model);
   for (const total of bundle.totals) {
     const item = document.createElement("div");
     item.className = "total-pill";
@@ -277,7 +281,7 @@ function renderBundle() {
     els.totalsStrip.append(item);
   }
 
-  appendPaymentRows(els.paymentRows, bundle.payment_inputs.map((input) => deriveVisiblePaymentFromInput(input)));
+  appendPaymentRows(els.paymentRows, model.rows);
 
   setButtonState();
   reportHeight();

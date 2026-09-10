@@ -25,6 +25,12 @@ import {
 } from "./qr-encode.js";
 import { createQrDetector } from "./qr-decode.js";
 import { assertAppIntegrity, loadIntegrityManifest } from "./integrity.js";
+import {
+  buildBundleRowModel,
+  buildHistoryRowModel,
+  normalizeHistoryPayment,
+  paymentCountText
+} from "./payment-grouping.js";
 import { amountMinorToDecimal } from "./payment-view.js";
 import {
   backendOriginRequiresPrfUnlock,
@@ -637,8 +643,18 @@ function pendingBundleTotalText(bundle) {
 }
 
 function pendingBundleTitle(bundle, index) {
-  const count = bundle?.payment_inputs?.length ?? 0;
-  return `Bundle ${index + 1} · ${count} tx`;
+  // Counts payments, not bank instructions, so the tab agrees with the rows the kernel renders --
+  // it runs the same grouping over the same signed bodies. Falls back to the raw instruction count
+  // if they cannot be derived: this is only a queue label, and a bundle the shell cannot read is
+  // still rejected by the kernel, which is what actually gates signing.
+  const inputs = bundle?.payment_inputs ?? [];
+  let count;
+  try {
+    count = paymentCountText(buildBundleRowModel(inputs));
+  } catch {
+    count = `${inputs.length} payment${inputs.length === 1 ? "" : "s"}`;
+  }
+  return `Bundle ${index + 1} · ${count}`;
 }
 
 function renderBundleQueue() {
@@ -761,22 +777,25 @@ function renderPaymentRows(target, payments) {
   }
 }
 
+// UNGROUPED line items, one per bank instruction. bankPaymentSummaryText counts these, and those
+// counts describe transfers at the bank -- so they must not be fed the grouped rows.
 function visiblePaymentsFromApproval(approval) {
   if (!Array.isArray(approval?.visible_payments)) {
     return [];
   }
-  return approval.visible_payments.map((payment) => ({
-    debtor_account_masked: payment?.debtor_account_masked ?? "",
-    creditor_account: payment?.creditor_account ?? "",
-    remittance_text: payment?.remittance_text ?? "",
-    amount_minor: payment?.amount_minor ?? "0",
-    currency: payment?.currency ?? "",
-    bank_status: payment?.bank_status ?? "",
-    bank_payment_status: payment?.bank_payment_status ?? "",
-    bank_payment_status_reason: payment?.bank_payment_status_reason ?? "",
-    bank_payment_id: payment?.bank_payment_id ?? "",
-    bank_error: payment?.bank_error ?? ""
-  }));
+  return approval.visible_payments.map((payment) => normalizeHistoryPayment(payment));
+}
+
+// GROUPED display rows: split parts of one payout collapse into a single row at the summed amount.
+// Takes the raw server items, because eligibility has to see which fields were actually absent.
+function historyRowModel(approval) {
+  return buildHistoryRowModel(approval?.visible_payments);
+}
+
+// A card with no line items at all means the server sent none -- not that the bundle paid nobody --
+// so it keeps saying "-" rather than claiming a count of zero.
+function historyCountText(model) {
+  return model.transferCount === 0 ? "-" : paymentCountText(model);
 }
 
 function approvalShareText(approval) {
@@ -822,7 +841,7 @@ function renderRecentApprovals() {
     const main = document.createElement("div");
     main.className = "activity-main";
     const bundle = document.createElement("strong");
-    bundle.textContent = `${approval.payment_count ?? "-"} transactions`;
+    bundle.textContent = historyCountText(historyRowModel(approval));
     const detail = document.createElement("span");
     detail.textContent = `Approved ${approvalTimeText(approval)} · ${shortBundleId(approval.bundle_id)}`;
     main.append(bundle, detail);
@@ -856,7 +875,8 @@ function renderActivityDetail() {
   }
 
   els.activityDetail.classList.remove("activity-detail-empty");
-  els.activityDetailTitle.textContent = `${approval.payment_count ?? "-"} transactions`;
+  const detailRows = historyRowModel(approval);
+  els.activityDetailTitle.textContent = historyCountText(detailRows);
   els.activityDetailApprover.textContent = approvalApproverText(approval);
   els.activityDetailApprover.classList.remove("hidden");
   els.activityDetailSummary.textContent = [
@@ -867,7 +887,7 @@ function renderActivityDetail() {
   ].filter(Boolean).join(" · ");
   els.activityDetailTableWrap.classList.remove("hidden");
   els.activityDetailClose.classList.remove("hidden");
-  renderPaymentRows(els.activityDetailRows, visiblePaymentsFromApproval(approval));
+  renderPaymentRows(els.activityDetailRows, detailRows.rows);
 }
 
 function sendKernelState() {
