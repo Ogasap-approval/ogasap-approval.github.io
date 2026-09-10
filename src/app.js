@@ -2075,7 +2075,16 @@ function renderAdminRequest() {
   // — and the anomaly panel carries a live Approve button, so it is exactly the pairing this
   // arrangement exists to prevent. A stuck admin request blocking the payment queue is the cheaper
   // failure: it is rare, it is loud, and it cannot be mistaken for authorising money.
-  els.approvalView?.classList.toggle("admin-request-only", holderNeeded);
+  // ONLY THE NORDEA ID WAIT TAKES THE VIEW. The payment queue is what this app is for, and hiding it
+  // is a cost that has to be earned. A bank-approval wait earns it: no access token means no payment
+  // can be submitted anyway, so there is nothing behind the panel to act on. An unrecognised request
+  // does not — the setup chain is stuck, the payments are not, and blanking them helps nobody.
+  //
+  // The invariant this relaxes said panel and takeover must read the same value, on the grounds that
+  // a panel up beside the queue would put two different Approve buttons on a money-releasing screen.
+  // That was right while the anomaly panel HAD a button. It no longer does (below), so the hazard is
+  // gone rather than traded away.
+  els.approvalView?.classList.toggle("admin-request-only", waiting);
   if (!holderNeeded || !els.adminRequestDetails) return;
   els.adminRequestDetails.replaceChildren();
 
@@ -2084,16 +2093,21 @@ function renderAdminRequest() {
     els.adminRequestBadge.textContent = "Needs review";
     els.adminRequestBadge.className = "badge badge-warn";
     els.adminRequestTitle.textContent = "Bank request this app does not recognise";
-    // Approvable only when the meaning could be DERIVED from the bytes. An unverifiable request has
-    // no action at all, and `canApprove` is already false for it — it is shown so somebody knows the
-    // flow has stopped, never so they can wave it through.
-    els.approveAdminRequestButton.hidden = false;
-    els.approveAdminRequestButton.disabled = !snap.canApprove;
-    els.approveAdminRequestButton.textContent =
-      ADMIN_ACTION_BUTTON_LABELS[snap.action?.action] ?? DEFAULT_ADMIN_BUTTON_LABEL;
+    // NO BUTTON, deliberately. This panel is reached only for a request the build could not
+    // characterise — an action outside ADMIN_AUTO_SIGN_ACTIONS, or one whose meaning could not be
+    // derived from its bytes at all. Approving that is not consent, it is a rubber stamp on bytes
+    // neither the holder nor this app understands, and the honest remedy is a reviewed code change
+    // that adds the action to the allowlist.
+    //
+    // What was ever valuable here is being TOLD: without a panel the chain stalls behind a
+    // server-side alert nobody is watching while a holder stands looking at an idle screen. Removing
+    // the button is also what lets this sit beside the payment queue rather than replacing it.
+    els.approveAdminRequestButton.hidden = true;
+    els.approveAdminRequestButton.disabled = true;
     const detail = snap.action
       ? adminDetailRows(snap.action)
       : [["Status", snap.error || "This request could not be verified on this device."]];
+    detail.push(["What now", "Nothing is signed and nothing is at risk. This needs an operator — the bank setup will not continue until the request is recognised."]);
     for (const [label, value] of detail) {
       const wrap = document.createElement("div");
       const dt = document.createElement("dt");
