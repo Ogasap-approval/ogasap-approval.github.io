@@ -19,6 +19,8 @@ import {
   unrecognisedRequestNeedsHolder
 } from "./admin-request.js";
 import { authorizePendingPayments } from "./approval-kernel.js";
+import { SUBMISSION_SCREEN_TITLE, submissionScreenText } from "./approval-result-text.js";
+import { createPollScheduler, createScreenWakeLock } from "./submission-guard.js";
 import {
   createMultipartReassembler,
   MULTIPART_PREFIX
@@ -136,9 +138,15 @@ const ids = [
   "adminRequestProgress",
   "adminRequestDetails",
   "approveAdminRequestButton",
-  "dismissAdminRequestButton"
+  "dismissAdminRequestButton",
+  "submissionScreen",
+  "submissionTitle",
+  "submissionPhase",
+  "submissionClock",
+  "submissionLeave"
 ];
 const els = Object.fromEntries(ids.map((id) => [id, document.querySelector(`#${id}`)]));
+const appHeader = document.querySelector(".app-header");
 const state = {
   phoneSharePackage: null,
   webauthnCredential: null,
@@ -172,9 +180,9 @@ const state = {
   migrationPollActive: false,
   migrationPollTimer: 0,
   kernelReady: false,
-  pollTimer: 0,
-  pollInFlight: false,
-  pollQueued: false,
+  // From the kernel's "started" to its "settled": the submission screen is up, the poll loop is paused and a
+  // screen wake lock is held. The poll's own timer and in-flight state live in `bundlePoll`.
+  approvalSubmissionActive: false,
   lockGeneration: 0,
   autoUnlockInFlight: false,
   autoUnlockAttemptedGeneration: -1,
@@ -284,6 +292,7 @@ function renderUnlockGate() {
   els.historyUnlockGate.classList.toggle("hidden", !locked);
   els.historyShell.classList.toggle("hidden", locked);
   queueAutoUnlock();
+  renderSubmissionScreen();
 }
 
 function lockPrfSession(message = "App locked") {
@@ -292,7 +301,6 @@ function lockPrfSession(message = "App locked") {
   }
 
   clearPollTimer();
-  state.pollQueued = false;
   state.lockGeneration += 1;
   state.autoUnlockInFlight = false;
   state.phoneSharePackage = null;
@@ -906,6 +914,59 @@ function sendKernelState() {
   }, kernelTargetOrigin());
 }
 
+// --- The approval submission screen ------------------------------------------
+//
+// From the approve tap until the kernel posts "settled": the approval POST, its outcome (settled after
+// unlock if the app locked once it had been sent), and the payment-authorization round, which needs the
+// share in memory. For that whole period the shell stops polling, holds a screen wake lock, and covers the
+// app with a screen saying what leaving would do. The kernel owns the words; the shell only draws them.
+const wakeLock = createScreenWakeLock();
+
+// An aria-live region re-announces on every write, and the kernel re-posts once a second for its clock.
+function setTextIfChanged(element, text) {
+  if (element && element.textContent !== text) {
+    element.textContent = text;
+  }
+}
+
+function renderSubmissionScreen(screen) {
+  if (screen) {
+    setTextIfChanged(els.submissionTitle, screen.title || SUBMISSION_SCREEN_TITLE);
+    setTextIfChanged(els.submissionPhase, screen.phase ?? "");
+    setTextIfChanged(els.submissionClock, screen.clock ?? "");
+    setTextIfChanged(els.submissionLeave, screen.leave ?? "");
+  }
+  // Out of the way while the share is locked: the unlock gate underneath is the one control the holder must
+  // reach, and unlocking is what lets the kernel settle an approval that had already been sent.
+  const visible = state.approvalSubmissionActive && !needsShareUnlock();
+  els.submissionScreen.classList.toggle("hidden", !visible);
+  // Out of reach for keyboard and assistive tech as well as the pointer. Not the kernel frame: WebAuthn needs
+  // its focus, and its own controls are disabled while it is busy.
+  for (const element of [appHeader, els.bundleQueue, els.adminRequestPanel, els.historyView, els.settingsView]) {
+    if (element) {
+      element.inert = visible;
+    }
+  }
+}
+
+function beginApprovalSubmission() {
+  state.approvalSubmissionActive = true;
+  // Stops the loop dead, a run already in flight included: its end no longer re-arms the timer.
+  bundlePoll.pause();
+  wakeLock.hold();
+  renderSubmissionScreen(submissionScreenText({ phase: "signing" }));
+}
+
+function endApprovalSubmission() {
+  if (!state.approvalSubmissionActive) {
+    return;
+  }
+  state.approvalSubmissionActive = false;
+  wakeLock.release();
+  renderSubmissionScreen();
+  bundlePoll.resume(1000);
+}
+
 function handleKernelMessage(event) {
   if (event.source !== els.kernelFrame.contentWindow || event.data?.source !== "approval-kernel") {
     return;
@@ -916,14 +977,19 @@ function handleKernelMessage(event) {
 
   if (event.data.type === "ready") {
     state.kernelReady = true;
+    // A kernel that has (re)loaded has no approval in flight, whatever this shell last heard from it.
+    endApprovalSubmission();
     sendKernelState();
   } else if (event.data.type === "status") {
     setStatus(event.data.message, event.data.level ?? "normal");
   } else if (event.data.type === "started") {
-    clearPollTimer();
-    state.pollQueued = false;
+    beginApprovalSubmission();
     state.lastApprovalResult = null;
     sendKernelState();
+  } else if (event.data.type === "submission") {
+    renderSubmissionScreen(event.data.screen);
+  } else if (event.data.type === "settled") {
+    endApprovalSubmission();
   } else if (event.data.type === "approved") {
     state.approvedBundleIds.add(event.data.bundle_id);
     state.lastApprovalResult = event.data.result ?? null;
@@ -1772,6 +1838,11 @@ function pollMigrationUntilResolved(migrationId) {
     if (!state.migrationPollActive || state.pendingMigrationId !== migrationId) {
       return;
     }
+    if (bundlePoll.paused) {
+      // An approval is in flight. This poll waits its turn rather than competing with it.
+      state.migrationPollTimer = setTimeout(tick, MIGRATION_POLL_INTERVAL_MS);
+      return;
+    }
     try {
       const status = await pollMigration(migrationId, state.phoneSharePackage, state.backendOrigin);
       if (status.status === "approved") {
@@ -1848,25 +1919,31 @@ async function resetEnrollment() {
   setStatus("Enrollment reset");
 }
 
-function clearPollTimer() {
-  if (state.pollTimer) {
-    clearTimeout(state.pollTimer);
-    state.pollTimer = 0;
+// The shell's poll loop, paused for as long as an approval is in flight (beginApprovalSubmission). Every
+// request it makes costs the server another threshold signature on the one loop that is verifying that
+// approval: on 2026-09-15 it added about 8.5s to a 25.7s approval.
+const bundlePoll = createPollScheduler({
+  intervalMs: POLL_INTERVAL_MS,
+  canSchedule: () => Boolean(state.phoneSharePackage && state.backendOrigin),
+  run: async ({ scheduled }) => {
+    const polled = pollPendingBundlesOnce();
+    if (scheduled) {
+      // Admin requests are created by an operator at an arbitrary moment; fetching them only right
+      // after enrollment meant a request raised while the app was already open would never appear.
+      refreshPendingAdminRequest().catch(() => {});
+      recoverPendingPaymentAuthorization().catch(() => {});
+    }
+    return polled;
   }
+});
+
+// Drops the timer and any queued follow-up (app lock, reset). Does not pause.
+function clearPollTimer() {
+  bundlePoll.cancel();
 }
 
 function schedulePendingBundlePoll(delay = POLL_INTERVAL_MS) {
-  clearPollTimer();
-  if (!state.phoneSharePackage || !state.backendOrigin) {
-    return;
-  }
-  state.pollTimer = setTimeout(() => {
-    pollPendingBundles();
-    // Admin requests are created by an operator at an arbitrary moment; fetching them only right
-    // after enrollment meant a request raised while the app was already open would never appear.
-    refreshPendingAdminRequest().catch(() => {});
-  recoverPendingPaymentAuthorization().catch(() => {});
-  }, delay);
+  bundlePoll.schedule(delay);
 }
 
 // --- Nordea admin approval ---------------------------------------------------
@@ -2424,14 +2501,15 @@ async function approvePendingAdminRequest() {
   return runAdminChain({ automatic: false });
 }
 
-async function pollPendingBundles(options = {}) {
-  if (state.pollInFlight) {
-    if (options.queueIfBusy) {
-      state.pollQueued = true;
-    }
-    return;
-  }
-  clearPollTimer();
+// Direct calls go through the scheduler too, so the in-flight guard, the queued follow-up ({ queueIfBusy: true })
+// and the approval pause apply to them exactly as to the timer.
+function pollPendingBundles(options = {}) {
+  return bundlePoll.runNow(options);
+}
+
+// One pass of the bundle poll. Returns false when there is nothing to poll with, which leaves the
+// timer disarmed.
+async function pollPendingBundlesOnce() {
   if (!state.phoneSharePackage) {
     state.pendingBundles = [];
     state.selectedBundleId = "";
@@ -2449,7 +2527,7 @@ async function pollPendingBundles(options = {}) {
     } else {
       setStatus("Enroll device in Settings to check approvals", "warning");
     }
-    return;
+    return false;
   }
   if (!state.backendOrigin) {
     state.pendingBundles = [];
@@ -2461,10 +2539,9 @@ async function pollPendingBundles(options = {}) {
     renderBundleQueue();
     sendKernelState();
     setStatus("Set backend URL in Settings to check approvals", "warning");
-    return;
+    return false;
   }
 
-  state.pollInFlight = true;
   const pollShare = state.phoneSharePackage;
   const pollBackendOrigin = state.backendOrigin;
   try {
@@ -2501,15 +2578,8 @@ async function pollPendingBundles(options = {}) {
     setStatus(pendingBundles.length > 1 ? `${pendingBundles.length} bundles ready for review` : "Bundle ready for review");
   } catch (error) {
     setStatus(`Approval polling failed: ${error.message}`, "error");
-  } finally {
-    state.pollInFlight = false;
-    if (state.pollQueued) {
-      state.pollQueued = false;
-      pollPendingBundles();
-    } else {
-      schedulePendingBundlePoll();
-    }
   }
+  return true;
 }
 
 async function init() {
@@ -2520,6 +2590,8 @@ async function init() {
       handleAppHidden();
     } else if (document.visibilityState === "visible") {
       queueAutoUnlock();
+      // The browser drops a wake lock whenever the page is hidden; take it back if still submitting.
+      wakeLock.handleVisibilityChange();
     }
   });
   window.addEventListener("pagehide", handleAppHidden);

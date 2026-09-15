@@ -1,7 +1,8 @@
 import {
+  ApprovalNotSentError,
+  dispatchBundleApproval,
   fetchPendingPaymentSign,
   fetchWebauthnChallengeNonce,
-  submitBundleApproval,
   submitPaymentSign
 } from "./api-client.js";
 import { APP_INTEGRITY_GRAPH, assertResourcesIntegrity } from "./integrity.js";
@@ -40,6 +41,16 @@ async function signInVerifiedWorker({ integrityManifest, phoneSharePackage, bund
   });
 }
 
+/**
+ * Everything up to and including SENDING an approval: the WebAuthn gesture, the signatures, the POST.
+ *
+ * It returns as soon as the request has been handed to the network, with `{ sentAt, response, verify }`
+ * (api-client.js dispatchBundleApproval), and NOT with the server's answer. That split is the app-lock
+ * boundary. Up to the send, a lock (`signal` / `isCancelled`) throws ApprovalNotSentError and nothing reaches
+ * the server. After it, there is nothing left to cancel: this frame — the one holding the phone share — has
+ * already returned, and the caller settles the outcome with approval-submission.js, reading the share again
+ * only once the app is unlocked.
+ */
 export async function approveReviewedBundle({
   phoneSharePackage,
   webauthnCredential,
@@ -49,14 +60,21 @@ export async function approveReviewedBundle({
   signal,
   isCancelled = () => false,
   onStatus = () => {},
-  onProgress = () => {}
+  onProgress = () => {},
+  // Seams, for tests only. Production passes none of these and gets the real modules.
+  fetchChallengeNonce = fetchWebauthnChallengeNonce,
+  requestAssertion = requestApprovalAssertion,
+  signInputs = signInVerifiedWorker,
+  dispatchApproval = dispatchBundleApproval
 }) {
   if (!phoneSharePackage || !webauthnCredential || !backendOrigin || !bundle) {
     throw new Error("approval kernel requires enrollment and a bundle");
   }
+  const cancelled = () => Boolean(signal?.aborted || isCancelled());
   const assertActive = () => {
-    if (signal?.aborted || isCancelled()) {
-      throw new Error("Approval cancelled by app lock");
+    if (cancelled()) {
+      // "Approval cancelled by app lock", and nothing was sent.
+      throw new ApprovalNotSentError();
     }
   };
 
@@ -66,9 +84,9 @@ export async function approveReviewedBundle({
   onProgress({ stage: "webauthn", message: "Confirm WebAuthn", percent: 0 });
   // #19: a fresh, server-issued, single-use, expiring challenge nonce is folded
   // into the challenge so the assertion cannot be replayed (even for this bundle).
-  const { challengeNonce, challengeNonceExpiresAt } = await fetchWebauthnChallengeNonce(phoneSharePackage, backendOrigin);
+  const { challengeNonce, challengeNonceExpiresAt } = await fetchChallengeNonce(phoneSharePackage, backendOrigin);
   assertActive();
-  const assertion = await requestApprovalAssertion({
+  const assertion = await requestAssertion({
     credentialId: webauthnCredential.credential_id,
     challengeBytes: await webauthnApprovalChallengeV1({
       ...metadata,
@@ -81,7 +99,7 @@ export async function approveReviewedBundle({
   const approvedAt = new Date().toISOString();
   onStatus("Signing payment inputs and status polling requests");
   onProgress({ stage: "preparing", message: "Preparing signatures", percent: 0 });
-  const { paymentSignatures, pollingCapabilityPackage } = await signInVerifiedWorker({
+  const { paymentSignatures, pollingCapabilityPackage } = await signInputs({
     integrityManifest,
     phoneSharePackage,
     bundle,
@@ -90,8 +108,16 @@ export async function approveReviewedBundle({
   });
   assertActive();
 
-  onProgress({ stage: "submitting", message: "Submitting approval", percent: 100 });
-  return submitBundleApproval({
+  // No fixed `message`: the kernel frame renders this stage itself, as an elapsed clock over the signature
+  // count (approval-result-text.js). The server combines and checks every one of these signatures before it
+  // answers, and on a real bundle that has taken longer than all of the signing above.
+  onProgress({
+    stage: "submitting",
+    percent: 100,
+    signature_count: paymentSignatures.length + (pollingCapabilityPackage?.requests?.length ?? 0)
+  });
+  // The request shape is unchanged; only when the phone stops waiting for it has moved.
+  return dispatchApproval({
     version: "bundle_approval_v1",
     ...metadata,
     totals: bundle.totals,
@@ -105,7 +131,11 @@ export async function approveReviewedBundle({
     phone_sign_shares: paymentSignatures.map((signature) => signature.sign_share_base64url),
     polling_capability_package: pollingCapabilityPackage,
     approved_at: approvedAt
-  }, phoneSharePackage, backendOrigin, { signal });
+  }, phoneSharePackage, backendOrigin, {
+    // Re-checked by the client after its own nonce round-trip and backend-auth signature, immediately
+    // before the request leaves: a lock during that preparation still means nothing was sent.
+    assertStillValid: () => !cancelled()
+  });
 }
 
 

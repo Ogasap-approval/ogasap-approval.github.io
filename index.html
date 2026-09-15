@@ -8,7 +8,7 @@
     <title>Approval</title>
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" href="./src/assets/icon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="./src/styles.css" integrity="sha256-KVigKzYq7uEUz2y+SR72A9SVSDuTpJutumecrKikzww=" crossorigin="anonymous">
+    <link rel="stylesheet" href="./src/styles.css" integrity="sha256-K9kp28OFuR5Kdk/B6PyZB75MvRQjwTOf2Smuj7AF4YE=" crossorigin="anonymous">
   </head>
   <body>
     <header class="app-header">
@@ -236,7 +236,20 @@
       </div>
     </div>
 
+    <!-- Over the whole app from the approve tap until the result is shown and the bank authorization round
+         has finished. It cannot keep anyone in the app, so the last line always says what really happens if
+         they leave at this point. Focus is left where it is: the kernel frame still needs it for WebAuthn. -->
+    <div id="submissionScreen" class="submission-screen hidden" role="dialog" aria-modal="true" aria-labelledby="submissionTitle" aria-describedby="submissionPhase submissionLeave">
+      <div class="submission-panel">
+        <div class="submission-bar" aria-hidden="true"></div>
+        <h2 id="submissionTitle">Submitting — do not close the app or lock your phone</h2>
+        <p id="submissionPhase" class="submission-phase" aria-live="polite">Signing on this phone</p>
+        <p id="submissionClock" class="submission-clock" role="timer"></p>
+        <p id="submissionLeave" class="submission-leave" aria-live="polite"></p>
+      </div>
+    </div>
+
     <script type="module" src="./src/frame-buster.js" integrity="sha256-NGGj/MXF4iHcdjp4OpfS5DpLKE1iVHkIc5CEwIumT0k=" crossorigin="anonymous"></script>
-    <script type="module" src="./src/bootstrap.js" integrity="sha256-4ZO3ShkCsIs9QInjFFfZY13ZcnGj1wKdLuokDf0Z52s=" crossorigin="anonymous"></script>
+    <script type="module" src="./src/bootstrap.js" integrity="sha256-4g94Ty07WB3e/0xKTps42Ctk4uxOYU3vCTxegjQDsyU=" crossorigin="anonymous"></script>
   </body>
 </html>

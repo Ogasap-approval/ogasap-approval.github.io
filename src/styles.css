@@ -74,6 +74,106 @@ button.approve-button-progress:disabled {
   white-space: pre-line;
 }
 
+/* The wait for the server after signing has no honest percentage (see approval-result-text.js), and the
+   full bar it used to show read as "done" for the half minute it lasted. This stage sweeps instead. */
+button.approve-button-waiting,
+button.approve-button-waiting:disabled {
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-strong) 50%, var(--accent) 100%);
+  background-size: 200% 100%;
+  animation: approve-button-sweep 1.6s linear infinite;
+}
+
+@keyframes approve-button-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button.approve-button-waiting,
+  button.approve-button-waiting:disabled {
+    animation: none;
+  }
+}
+
+/* The "do not close" screen (app.js renderSubmissionScreen). Over everything, the header included, from the
+   approve tap until the approval and its bank authorization round are settled. */
+.submission-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: max(18px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom));
+  background: rgb(245 247 242 / 0.96);
+}
+
+.submission-panel {
+  display: grid;
+  gap: 12px;
+  width: min(460px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 20px 18px;
+  background: var(--surface);
+  box-shadow: 0 18px 45px rgb(23 32 23 / 0.14);
+}
+
+.submission-panel h2 {
+  margin: 0;
+  font-size: 1.12rem;
+  line-height: 1.3;
+}
+
+.submission-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-strong) 50%, var(--accent) 100%);
+  background-size: 200% 100%;
+  animation: approve-button-sweep 1.6s linear infinite;
+}
+
+.submission-phase {
+  margin: 0;
+  font-weight: 600;
+}
+
+.submission-clock {
+  margin: 0;
+  min-height: 1.2em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.submission-leave {
+  margin: 0;
+  color: var(--warn);
+  font-size: 0.92rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .submission-bar {
+    animation: none;
+    background: var(--accent);
+  }
+}
+
+.recheck-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+  border: 1px solid #e7c56e;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: #fff8e8;
+  font-size: 0.88rem;
+}
+
 @media (max-width: 420px) {
   button.approve-button-progress,
   button.approve-button-progress:disabled {

@@ -1,4 +1,16 @@
 import { approveReviewedBundle, authorizePendingPayments } from "./approval-kernel.js";
+import {
+  approvalLockedStatus,
+  bankSubmissionText,
+  cancelledBeforeSendResult,
+  elapsedText,
+  interruptedApprovalResult,
+  serverVerificationStatus,
+  serverVerificationText,
+  submissionScreenText
+} from "./approval-result-text.js";
+import { settleSentApproval } from "./approval-submission.js";
+import { fetchPendingBundles, fetchRecentApprovals } from "./api-client.js";
 import { isTrustedFrameMessage } from "./frame-messaging.js";
 import { loadIntegrityManifest } from "./integrity.js";
 import { buildBundleRowModel, paymentCountMetricText } from "./payment-grouping.js";
@@ -18,7 +30,10 @@ const ids = [
   "approveButton",
   "resultPanel",
   "resultTitle",
-  "resultDetail"
+  "resultDetail",
+  "recheckPanel",
+  "recheckText",
+  "recheckButton"
 ];
 const els = Object.fromEntries(ids.map((id) => [id, document.querySelector(`#${id}`)]));
 const state = {
@@ -32,8 +47,20 @@ const state = {
   approvedBundleIds: new Set(),
   busy: false,
   approvalProgress: null,
+  serverWaitStartedAt: 0,
+  serverWaitTicker: 0,
   lockEpoch: 0,
-  approvalAbortController: null
+  approvalAbortController: null,
+  // What the shell's "do not close" screen shows: "" when no approval is in flight, else
+  // signing | verifying | checking | authorizing.
+  submissionPhase: "",
+  submissionSignatureCount: 0,
+  // Set the moment the approval POST has been handed to the network, and cleared when the approval settles.
+  // Non-zero is what turns an app lock from "cancel" into "wipe the share and settle the outcome after unlock".
+  sentAt: 0,
+  shareWaiters: [],
+  // A sent approval whose outcome could not be confirmed: its bundle stays un-approvable here until checked.
+  unresolvedApproval: null
 };
 
 function post(type, fields = {}) {
@@ -52,45 +79,6 @@ function setStatus(message, level = "normal") {
 
 function totalText(totals = []) {
   return totals.map((total) => amountMinorToDecimal(total.amount_minor, total.currency)).join(", ");
-}
-
-function bankSubmissionText(submission) {
-  if (!submission) {
-    return "";
-  }
-  if (!submission.enabled) {
-    return "Bank submission disabled";
-  }
-  const total = submission.total_payment_count ?? submission.payment_count ?? 0;
-  const done = submission.payment_count ?? 0;
-  if (submission.status === "queued") {
-    return "queued for bank submission by backend";
-  }
-  if (submission.status === "submitting") {
-    return `submitting to bank ${done}/${total}`;
-  }
-  if (submission.status === "executed") {
-    return "executed by bank";
-  }
-  if (submission.status === "submitted") {
-    return "submitted to bank";
-  }
-  if (submission.status === "auth_expired") {
-    return "bank auth expired";
-  }
-  if (submission.status === "key_refreshing") {
-    return "renewing bank signing key";
-  }
-  if (submission.status === "key_inactive") {
-    return "bank signing key inactive";
-  }
-  if (submission.status === "date_invalid") {
-    return "bank date expired";
-  }
-  if (submission.status === "failed") {
-    return `Bank submission failed${submission.error ? `: ${submission.error}` : ""}`;
-  }
-  return `Bank ${submission.status}`;
 }
 
 function setResult(result) {
@@ -126,6 +114,33 @@ function span(text, className = "") {
 
 function currentBundleApproved() {
   return Boolean(state.bundle && state.approvedBundleIds.has(state.bundle.bundle_id));
+}
+
+function currentBundleUnresolved() {
+  return Boolean(state.bundle && state.unresolvedApproval?.bundleId === state.bundle.bundle_id);
+}
+
+function shareReady() {
+  return Boolean(state.phoneSharePackage && state.backendOrigin);
+}
+
+// Resolved by applyState when an unlock brings the share back. Only a promise waits here — nothing that
+// holds the share — so a sent approval can sit out a lock of any length.
+function waitForShare() {
+  return new Promise((resolve) => {
+    state.shareWaiters.push(resolve);
+  });
+}
+
+function releaseShareWaiters() {
+  if (!shareReady() || state.shareWaiters.length === 0) {
+    return;
+  }
+  const waiters = state.shareWaiters;
+  state.shareWaiters = [];
+  for (const resolve of waiters) {
+    resolve();
+  }
 }
 
 function boundedPercent(progress) {
@@ -178,6 +193,18 @@ function approvalProgressText(progress, { multiline = false } = {}) {
   if (!progress) {
     return "Approve";
   }
+  // Ahead of `message` on purpose: this stage is rendered here, as a clock, and a fixed label passed in by
+  // a caller must not be able to put "100%" back over a wait the server has not reported on.
+  if (progress.stage === "submitting") {
+    return serverVerificationText({
+      signatureCount: progress.signature_count ?? progress.total,
+      elapsedMs: state.serverWaitStartedAt ? Date.now() - state.serverWaitStartedAt : 0
+    }, { multiline });
+  }
+  if (progress.stage === "checking") {
+    const elapsed = elapsedText(state.sentAt ? Date.now() - state.sentAt : 0);
+    return multiline ? `Checking result\n${elapsed}` : `Checking result · ${elapsed}`;
+  }
   if (progress.message) {
     return progress.message;
   }
@@ -185,25 +212,77 @@ function approvalProgressText(progress, { multiline = false } = {}) {
     const parts = signingProgressParts(progress);
     return multiline ? `${parts.top}\n${parts.bottom}` : `${parts.top} · ${parts.bottom}`;
   }
-  if (progress.stage === "submitting") {
-    return "Submitting approval · 100%";
-  }
   const percent = boundedPercent(progress);
   return `Signing · ${percent}%`;
 }
 
+// The shell draws the "do not close" screen over the whole app; this kernel owns what it says, because this
+// is where the approval's real state lives. Posted on every change and once a second while a clock runs.
+function publishSubmission() {
+  if (!state.submissionPhase) {
+    return;
+  }
+  const locked = Boolean(state.sentAt && !state.phoneSharePackage);
+  const phase = locked ? "locked" : state.submissionPhase;
+  const screen = submissionScreenText({
+    phase,
+    progressText: state.approvalProgress ? approvalProgressText(state.approvalProgress) : "",
+    signatureCount: state.submissionSignatureCount,
+    elapsedMs: phase === "checking"
+      ? Date.now() - state.sentAt
+      : state.serverWaitStartedAt ? Date.now() - state.serverWaitStartedAt : 0
+  });
+  post("submission", { screen });
+}
+
+function tickClock() {
+  setButtonState();
+  publishSubmission();
+}
+
+// The server wait is the one stage with nothing to report but time, so the button re-renders once a second
+// while it lasts. Started on entering the stage and stopped on leaving it by ANY route — a result, an error,
+// the app lock — because a ticker left running would keep rewriting a button nobody is waiting on.
+function syncServerWaitClock() {
+  const stage = state.approvalProgress?.stage;
+  const waiting = state.busy && (stage === "submitting" || stage === "checking");
+  if (waiting && !state.serverWaitTicker) {
+    state.serverWaitStartedAt = Date.now();
+    state.serverWaitTicker = setInterval(tickClock, 1000);
+  } else if (!waiting && state.serverWaitTicker) {
+    clearInterval(state.serverWaitTicker);
+    state.serverWaitTicker = 0;
+    state.serverWaitStartedAt = 0;
+  }
+}
+
 function setApprovalProgress(progress) {
   state.approvalProgress = progress;
-  setButtonState();
-  if (progress) {
-    setStatus(approvalProgressText(progress));
+  if (progress?.stage === "submitting") {
+    state.submissionPhase = "verifying";
+    state.submissionSignatureCount = progress.signature_count ?? progress.total ?? 0;
+  } else if (progress && progress.stage !== "checking") {
+    state.submissionPhase = "signing";
   }
+  syncServerWaitClock();
+  setButtonState();
+  publishSubmission();
+  if (!progress) {
+    return;
+  }
+  // One explanatory line for the whole server wait, rather than the ticking button label copied into the
+  // status bar every second.
+  setStatus(progress.stage === "submitting"
+    ? serverVerificationStatus(progress.signature_count ?? progress.total)
+    : approvalProgressText(progress));
 }
 
 function setButtonState() {
   const approved = currentBundleApproved();
   const showProgress = state.busy && !approved && state.approvalProgress;
+  const waiting = Boolean(showProgress && (state.approvalProgress.stage === "submitting" || state.approvalProgress.stage === "checking"));
   els.approveButton.classList.toggle("approve-button-progress", Boolean(showProgress));
+  els.approveButton.classList.toggle("approve-button-waiting", waiting);
   if (showProgress) {
     els.approveButton.style.setProperty("--approval-progress", `${boundedPercent(state.approvalProgress)}%`);
     els.approveButton.title = approvalProgressText(state.approvalProgress);
@@ -211,8 +290,18 @@ function setButtonState() {
     els.approveButton.style.removeProperty("--approval-progress");
     els.approveButton.title = "";
   }
-  els.approveButton.disabled = state.busy || approved || !state.phoneSharePackage || !state.webauthnCredential || !state.backendOrigin || !state.bundle;
+  els.approveButton.disabled = state.busy || approved || currentBundleUnresolved() || !state.phoneSharePackage || !state.webauthnCredential || !state.backendOrigin || !state.bundle;
   els.approveButton.textContent = approved ? "Approved" : showProgress ? approvalProgressText(state.approvalProgress, { multiline: true }) : "Approve";
+}
+
+function renderRecheck() {
+  const record = state.unresolvedApproval;
+  els.recheckPanel.classList.toggle("hidden", !record);
+  if (!record) {
+    return;
+  }
+  els.recheckText.textContent = `Not yet confirmed whether the server recorded the approval of ${record.bundleId}. Do not approve it again until this has been checked.`;
+  els.recheckButton.disabled = state.busy || !shareReady();
 }
 
 function emptyRow(text = "-") {
@@ -250,6 +339,7 @@ function renderBundle() {
   const { bundle } = state;
   els.totalsStrip.replaceChildren();
   els.paymentRows.replaceChildren();
+  renderRecheck();
 
   if (state.bundleError) {
     els.bundleSummary.textContent = "Bundle rejected";
@@ -289,8 +379,12 @@ function renderBundle() {
 
 async function applyState(message) {
   const nextPhoneSharePackage = message.phoneSharePackage ?? null;
-  if (state.phoneSharePackage && !nextPhoneSharePackage) {
+  const locking = Boolean(state.phoneSharePackage && !nextPhoneSharePackage);
+  if (locking) {
     state.lockEpoch += 1;
+    // Cancels an approval that has NOT been sent. Once it has, approveBundle has already detached this
+    // controller: the lock still takes the share out of memory (just below), but the approval is left to
+    // finish on the server and its outcome is settled after unlock.
     state.approvalAbortController?.abort();
   }
   state.phoneSharePackage = nextPhoneSharePackage;
@@ -298,6 +392,11 @@ async function applyState(message) {
   state.backendOrigin = message.backendOrigin ?? "";
   state.lastApprovalResult = Object.hasOwn(message, "lastApprovalResult") ? message.lastApprovalResult : state.lastApprovalResult;
   state.approvedBundleIds = new Set(message.approvedBundleIds ?? []);
+  if (locking && state.sentAt) {
+    setStatus(approvalLockedStatus(), "warning");
+  }
+  publishSubmission();
+  releaseShareWaiters();
 
   if (message.bundle) {
     await validateBundleForApprovalV1(message.bundle);
@@ -319,9 +418,15 @@ const PAYMENT_AUTHORIZATION_RETRY_MS = 1200;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const AUTHORIZATION_LEFT_FOR_LATER = "Bundle approved. The app locked before the bank authorization was finished; it finishes by itself the next time the app is open and unlocked.";
+
 async function runPaymentAuthorizationRound({ lockEpoch }) {
+  const cancelled = () => lockEpoch !== state.lockEpoch || !state.phoneSharePackage;
   for (let attempt = 0; attempt < PAYMENT_AUTHORIZATION_ATTEMPTS; attempt += 1) {
-    if (lockEpoch !== state.lockEpoch || !state.phoneSharePackage) return;
+    if (cancelled()) {
+      setStatus(AUTHORIZATION_LEFT_FOR_LATER, "warning");
+      return;
+    }
     let outcome;
     try {
       outcome = await authorizePendingPayments({
@@ -332,10 +437,14 @@ async function runPaymentAuthorizationRound({ lockEpoch }) {
         // this runs and syncs it here. Anything else offered in this window belongs to somebody else's
         // decision and is left to them; the shell's background round is what eventually finishes those.
         recognizeBundle: (bundleId) => state.approvedBundleIds.has(bundleId),
-        isCancelled: () => lockEpoch !== state.lockEpoch || !state.phoneSharePackage,
+        isCancelled: cancelled,
         onStatus: setStatus
       });
     } catch (error) {
+      if (cancelled()) {
+        setStatus(AUTHORIZATION_LEFT_FOR_LATER, "warning");
+        return;
+      }
       // Never downgrade the approval. The money is approved and submitted; what failed is the
       // follow-on, and the backend alerts on a payment left waiting.
       setStatus(`Bundle approved. Payment authorization could not be completed: ${error.message}`, "warning");
@@ -371,49 +480,87 @@ async function runPaymentAuthorizationRound({ lockEpoch }) {
   }
 }
 
-async function approveBundle() {
-  if (!state.phoneSharePackage || !state.webauthnCredential || !state.backendOrigin || !state.bundle || currentBundleApproved()) {
-    return;
+// The payment-authorization round needs the phone share IN MEMORY: every signature over the bank's
+// authorization request is this phone's threshold share combined with the company's, and the server holds
+// no share that can stand in for it. A lock wipes the share, so leaving during the round leaves the payments
+// at AUTHORIZATION_PARTIAL until the app is next open and unlocked (the shell's background round). That is
+// why the submission screen stays up through this, and comes down as soon as it is over.
+async function authorizeApprovedBundle() {
+  state.submissionPhase = "authorizing";
+  publishSubmission();
+  await runPaymentAuthorizationRound({ lockEpoch: state.lockEpoch });
+}
+
+function approvalSummary(record, result) {
+  return [totalText(record.totals) || result?.bundle_id || record.bundleId, bankSubmissionText(result?.bank_submission)]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function showApprovalResult(bundleId, approvalResult, { approved = false, message = "", level = "normal" } = {}) {
+  if (approved) {
+    state.approvedBundleIds.add(bundleId);
+  }
+  // The server has answered, so its clock stops now rather than running on under "Approved" through the
+  // payment-authorization round. After the add above, so the button goes straight to "Approved".
+  setApprovalProgress(null);
+  state.lastApprovalResult = approvalResult;
+  setResult(approvalResult);
+  if (message) {
+    setStatus(message, level);
+  }
+  if (approved) {
+    post("approved", { bundle_id: bundleId, result: approvalResult });
+  } else {
+    post("error", { message: approvalResult.detail, result: approvalResult });
+  }
+}
+
+async function settleApproval(record) {
+  const outcome = await settleSentApproval({
+    sent: record.sent,
+    bundleId: record.bundleId,
+    approverId: record.approverId,
+    shareIndex: record.shareIndex,
+    sentAt: record.sentAt,
+    // Read at the moment of use, never kept: null while locked.
+    currentShare: () => (shareReady() ? state.phoneSharePackage : null),
+    waitForShare,
+    lookup: async (share) => {
+      const [pendingBundles, recentApprovals] = await Promise.all([
+        fetchPendingBundles(share, record.backendOrigin),
+        fetchRecentApprovals(share, record.backendOrigin)
+      ]);
+      return { pendingBundles, recentApprovals };
+    },
+    onPhase: ({ phase }) => {
+      if (phase === "locked") {
+        setStatus(approvalLockedStatus(), "warning");
+        publishSubmission();
+      } else if (phase === "checking" && state.approvalProgress?.stage !== "checking") {
+        state.submissionPhase = "checking";
+        setApprovalProgress({ stage: "checking" });
+        setStatus("Checking whether the server recorded the approval", "warning");
+      }
+    }
+  });
+
+  // The outcome is known (or known to be unknown): a lock from here on no longer means "sent, not yet settled".
+  state.sentAt = 0;
+  if (outcome.kind !== "unknown" && state.unresolvedApproval?.bundleId === record.bundleId) {
+    state.unresolvedApproval = null;
   }
 
-  state.busy = true;
-  state.approvalProgress = null;
-  const lockEpoch = state.lockEpoch;
-  const approvalAbortController = new AbortController();
-  state.approvalAbortController = approvalAbortController;
-  state.lastApprovalResult = null;
-  setButtonState();
-  setApprovalProgress({ stage: "webauthn", message: "Confirm WebAuthn", percent: 0 });
-  setResult(null);
-  post("started");
-
-  try {
-    const result = await approveReviewedBundle({
-      phoneSharePackage: state.phoneSharePackage,
-      webauthnCredential: state.webauthnCredential,
-      backendOrigin: state.backendOrigin,
-      bundle: state.bundle,
-      integrityManifest: state.integrityManifest,
-      signal: approvalAbortController.signal,
-      isCancelled: () => lockEpoch !== state.lockEpoch || !state.phoneSharePackage,
-      onStatus: setStatus,
-      onProgress: setApprovalProgress
-    });
-    const approvalDetail = [totalText(state.bundle.totals) || result?.bundle_id || state.bundle.bundle_id, bankSubmissionText(result?.bank_submission)]
-      .filter(Boolean)
-      .join(" · ");
+  if (outcome.kind === "approved") {
+    const result = outcome.result;
     const approvalResult = {
       status: "approved",
       title: "Bundle approved successfully",
-      detail: `${state.bundle.payment_inputs.length} transactions · ${approvalDetail}`
+      detail: `${record.paymentCount} transactions · ${approvalSummary(record, result)}`
     };
-    state.approvedBundleIds.add(state.bundle.bundle_id);
-    state.lastApprovalResult = approvalResult;
-    setResult(approvalResult);
-    setStatus(result?.bank_submission?.status === "queued" ? "Bundle approved; backend will submit to bank" : "Bundle approved");
-    post("approved", {
-      bundle_id: state.bundle.bundle_id,
-      result: approvalResult
+    showApprovalResult(record.bundleId, approvalResult, {
+      approved: true,
+      message: result?.bank_submission?.status === "queued" ? "Bundle approved; backend will submit to bank" : "Bundle approved"
     });
     // SECOND ROUND, NO SECOND GESTURE. The approval above only gets the payments CREATED at Nordea; the
     // bank will not execute them until it has a payment authorization, and that request names them by
@@ -424,27 +571,19 @@ async function approveBundle() {
     // Deliberately after `post("approved")` and deliberately unable to fail the approval: the bundle IS
     // approved, and an authorization that does not land is a separate, recoverable state — not a reason
     // to tell the holder their approval failed.
-    await runPaymentAuthorizationRound({ lockEpoch });
-  } catch (error) {
-    if (error.message === "Approval cancelled by app lock" || error.name === "AbortError") {
-      setResult(null);
-      setStatus("Approval cancelled by app lock", "warning");
-      return;
-    }
+    await authorizeApprovedBundle();
+    return;
+  }
+
+  if (outcome.kind === "rejected") {
+    const error = outcome.error;
     if (error.code === "bundle_already_approved") {
       const alreadyResult = {
         status: "warning",
         title: "Bundle already approved",
         detail: error.body?.received_at ? `Approved at ${new Date(error.body.received_at).toLocaleString()}` : "This bundle was already recorded by the backend."
       };
-      state.approvedBundleIds.add(state.bundle.bundle_id);
-      state.lastApprovalResult = alreadyResult;
-      setResult(alreadyResult);
-      setStatus("Bundle already approved", "warning");
-      post("approved", {
-        bundle_id: state.bundle.bundle_id,
-        result: alreadyResult
-      });
+      showApprovalResult(record.bundleId, alreadyResult, { approved: true, message: "Bundle already approved", level: "warning" });
       return;
     }
     const failedResult = {
@@ -452,21 +591,148 @@ async function approveBundle() {
       title: "Approval failed",
       detail: error.message
     };
-    state.lastApprovalResult = failedResult;
-    setResult(failedResult);
-    setStatus(error.message, "error");
-    post("error", {
-      message: error.message,
-      result: failedResult
+    showApprovalResult(record.bundleId, failedResult, { message: error.message, level: "error" });
+    return;
+  }
+
+  const interrupted = interruptedApprovalResult(outcome, {
+    summary: `${record.paymentCount} transactions · ${totalText(record.totals) || record.bundleId}`
+  });
+  if (outcome.kind === "recorded") {
+    showApprovalResult(record.bundleId, interrupted, {
+      approved: true,
+      message: interrupted.title,
+      level: outcome.by === "self" ? "normal" : "warning"
     });
+    if (outcome.by === "self") {
+      await authorizeApprovedBundle();
+    }
+    return;
+  }
+  if (outcome.kind === "unknown") {
+    state.unresolvedApproval = record;
+  }
+  showApprovalResult(record.bundleId, interrupted, { message: interrupted.title, level: "warning" });
+}
+
+async function approveBundle() {
+  if (!state.phoneSharePackage || !state.webauthnCredential || !state.backendOrigin || !state.bundle || currentBundleApproved() || currentBundleUnresolved()) {
+    return;
+  }
+
+  // Captured ONCE. The shell can push a different bundle while this runs, and the result, the approved set
+  // and the lookup must all describe the bundle that was actually signed.
+  const bundle = state.bundle;
+  const backendOrigin = state.backendOrigin;
+  const identity = { approverId: state.phoneSharePackage.approver_id, shareIndex: state.phoneSharePackage.share_index };
+
+  state.busy = true;
+  state.approvalProgress = null;
+  const lockEpoch = state.lockEpoch;
+  const approvalAbortController = new AbortController();
+  state.approvalAbortController = approvalAbortController;
+  state.lastApprovalResult = null;
+  state.submissionPhase = "signing";
+  setButtonState();
+  setResult(null);
+  post("started");
+  setApprovalProgress({ stage: "webauthn", message: "Confirm WebAuthn", percent: 0 });
+
+  try {
+    let sent;
+    try {
+      sent = await approveReviewedBundle({
+        phoneSharePackage: state.phoneSharePackage,
+        webauthnCredential: state.webauthnCredential,
+        backendOrigin,
+        bundle,
+        integrityManifest: state.integrityManifest,
+        signal: approvalAbortController.signal,
+        isCancelled: () => lockEpoch !== state.lockEpoch || !state.phoneSharePackage,
+        onStatus: setStatus,
+        onProgress: setApprovalProgress
+      });
+    } catch (error) {
+      // Everything thrown here happened BEFORE the request left the phone, so it is final: nothing reached
+      // the server.
+      if (error.name === "ApprovalNotSentError" || error.message === "Approval cancelled by app lock" || error.name === "AbortError") {
+        showApprovalResult(bundle.bundle_id, cancelledBeforeSendResult(), {
+          message: "Approval cancelled by app lock. Nothing was sent.",
+          level: "warning"
+        });
+        return;
+      }
+      const failedResult = {
+        status: "failed",
+        title: "Approval failed",
+        detail: error.message
+      };
+      showApprovalResult(bundle.bundle_id, failedResult, { message: error.message, level: "error" });
+      return;
+    }
+
+    // SENT. From here a lock cannot, and must not, undo the approval: detach the controller so it aborts
+    // nothing, and settle the outcome — after unlock if need be.
+    if (state.approvalAbortController === approvalAbortController) {
+      state.approvalAbortController = null;
+    }
+    state.sentAt = sent.sentAt;
+    await settleApproval({
+      sent,
+      sentAt: sent.sentAt,
+      bundleId: bundle.bundle_id,
+      totals: bundle.totals,
+      paymentCount: bundle.payment_inputs.length,
+      backendOrigin,
+      ...identity
+    });
+  } catch (error) {
+    setStatus(`Approval could not be completed: ${error.message}`, "error");
   } finally {
     if (state.approvalAbortController === approvalAbortController) {
       state.approvalAbortController = null;
     }
     state.busy = false;
     state.approvalProgress = null;
+    syncServerWaitClock();
+    state.submissionPhase = "";
+    state.sentAt = 0;
     setButtonState();
+    renderRecheck();
     reportHeight();
+    // The one message that lets the shell take the submission screen down and poll again.
+    post("settled");
+  }
+}
+
+// "Check again" for an approval whose outcome could not be confirmed. Never re-sends: it uses an answer that
+// has arrived since, and otherwise asks the server, which is conclusive now that the window has passed.
+async function recheckApproval() {
+  const record = state.unresolvedApproval;
+  if (!record || state.busy || !shareReady()) {
+    return;
+  }
+  state.busy = true;
+  state.sentAt = record.sentAt;
+  state.submissionPhase = "checking";
+  setResult(null);
+  post("started");
+  setApprovalProgress({ stage: "checking" });
+  renderRecheck();
+  try {
+    await settleApproval(record);
+  } catch (error) {
+    setStatus(`Could not check the approval: ${error.message}`, "error");
+  } finally {
+    state.busy = false;
+    state.approvalProgress = null;
+    syncServerWaitClock();
+    state.submissionPhase = "";
+    state.sentAt = 0;
+    setButtonState();
+    renderRecheck();
+    reportHeight();
+    post("settled");
   }
 }
 
@@ -489,6 +755,10 @@ window.addEventListener("message", (event) => {
 
 els.approveButton.addEventListener("click", () => {
   approveBundle();
+});
+
+els.recheckButton.addEventListener("click", () => {
+  recheckApproval();
 });
 
 if ("ResizeObserver" in window) {

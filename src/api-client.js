@@ -52,12 +52,27 @@ function apiUrl(path, params = {}, backendOrigin) {
   return url;
 }
 
+// Only ever reached AFTER the company-share attestation has verified, so `companySigned` says this refusal is
+// the server's own word rather than something on the wire claiming to be it.
 function throwBackendError(response, body) {
   const error = new Error(body.message ?? body.error ?? `approval backend returned ${response.status}`);
   error.status = response.status;
   error.code = body.error;
   error.body = body;
+  error.companySigned = true;
   throw error;
+}
+
+/**
+ * Thrown when an approval was stopped BEFORE its request left the phone, so the server never saw it.
+ * The message is the one the kernel has always shown for an app lock during signing.
+ */
+export class ApprovalNotSentError extends Error {
+  constructor() {
+    super("Approval cancelled by app lock");
+    this.name = "ApprovalNotSentError";
+    this.sent = false;
+  }
 }
 
 function parseJsonBody(response, bodyText) {
@@ -75,7 +90,7 @@ function parseJsonBody(response, bodyText) {
 }
 
 function decodeBackendResponseHeader(response) {
-  const raw = response.headers.get(BACKEND_RESPONSE_HEADER);
+  const raw = response.attestation;
   if (!raw) {
     throw new Error("approval backend response was not signed by company shares");
   }
@@ -153,18 +168,30 @@ async function verifyBackendResponseAttestation({ response, bodyBytes, phoneShar
   });
 }
 
-async function verifiedJsonResponse(response, {
+// Everything verification needs from a response, read off the wire and held as plain data. Capturing is
+// separate from verifying because verifying needs the phone share (the phone's half of the response
+// signature) and capturing does not: an approval's answer can be taken in while the app is locked and the
+// share is out of memory, and checked once it is back.
+async function captureResponse(response) {
+  return {
+    status: response.status,
+    ok: response.ok,
+    attestation: response.headers.get(BACKEND_RESPONSE_HEADER),
+    bodyText: await response.text()
+  };
+}
+
+async function verifyCapturedResponse(captured, {
   method,
   path,
   phoneSharePackage,
   requestServerNonce = "-",
   requestClientNonce = "-"
 }) {
-  const bodyText = await response.text();
-  const bodyBytes = utf8Encode(bodyText);
-  const body = parseJsonBody(response, bodyText);
+  const bodyBytes = utf8Encode(captured.bodyText);
+  const body = parseJsonBody(captured, captured.bodyText);
   await verifyBackendResponseAttestation({
-    response,
+    response: captured,
     bodyBytes,
     phoneSharePackage,
     method,
@@ -172,10 +199,14 @@ async function verifiedJsonResponse(response, {
     requestServerNonce,
     requestClientNonce
   });
-  if (!response.ok) {
-    throwBackendError(response, body);
+  if (!captured.ok) {
+    throwBackendError(captured, body);
   }
   return body;
+}
+
+async function verifiedJsonResponse(response, options) {
+  return verifyCapturedResponse(await captureResponse(response), options);
 }
 
 function randomNonce() {
@@ -587,7 +618,24 @@ export async function fetchRecentApprovals(phoneSharePackage, backendOrigin) {
   return normalizeRecentApprovals(body);
 }
 
-export async function submitBundleApproval(approval, phoneSharePackage, backendOrigin, { signal } = {}) {
+/**
+ * Send a bundle approval and hand back its answer UNVERIFIED, without waiting for it.
+ *
+ * Resolves the moment the request has been handed to the network, with:
+ *   sentAt    when that happened (ms)
+ *   response  a promise of the captured answer; rejects if the answer never arrives
+ *   verify    (captured, phoneSharePackage) => the verified, schema-checked result
+ *
+ * `assertStillValid` is re-checked after the nonce round-trip and the backend-auth signature, immediately
+ * before the send, so an app lock during that preparation throws ApprovalNotSentError and nothing leaves.
+ *
+ * After the send there is deliberately NO abort signal on the request. It carries only signed data, the
+ * server records the approval whether or not anyone is still listening, and its answer is company-signed —
+ * so a lock has nothing to gain by cancelling it and a holder has everything to lose by never learning what
+ * happened. The share is not needed again until `verify`, which takes it as an argument: nothing returned
+ * from here keeps a reference to it (see sentBundleApproval).
+ */
+export async function dispatchBundleApproval(approval, phoneSharePackage, backendOrigin, { assertStillValid } = {}) {
   const body = JSON.stringify(approval);
   const bodyBytes = utf8Encode(body);
   const auth = await signedApprovalHeaders({
@@ -597,21 +645,50 @@ export async function submitBundleApproval(approval, phoneSharePackage, backendO
     phoneSharePackage,
     backendOrigin
   });
-  const response = await fetch(apiUrl(BUNDLE_APPROVAL_PATH, {}, backendOrigin), {
+  // LAST controllable moment. Nothing between this check and fetch() awaits, so a lock cannot slip between.
+  if (typeof assertStillValid === "function" && !assertStillValid()) {
+    throw new ApprovalNotSentError();
+  }
+  const sentAt = Date.now();
+  const response = fetch(apiUrl(BUNDLE_APPROVAL_PATH, {}, backendOrigin), {
     method: "POST",
     headers: {
       ...auth.headers,
       "Content-Type": "application/json"
     },
-    body,
-    signal
-  });
-  const result = await verifiedJsonResponse(response, {
-    method: "POST",
-    path: BUNDLE_APPROVAL_PATH,
-    phoneSharePackage,
+    body
+  }).then(captureResponse);
+  return sentBundleApproval(response, {
+    sentAt,
     requestServerNonce: auth.serverNonce,
     requestClientNonce: auth.clientNonce
   });
-  return validateResponseBody("bundle_approval_result_v1", result);
+}
+
+// A separate function on purpose: its scope has no phone share in it, so the closures it returns cannot keep
+// one alive while the server is still verifying and the app has been locked.
+function sentBundleApproval(response, { sentAt, requestServerNonce, requestClientNonce }) {
+  // Handled here so a lost answer is never an unhandled rejection; whoever awaits `response` still sees it.
+  response.catch(() => {});
+  return {
+    sentAt,
+    response,
+    async verify(captured, phoneSharePackage) {
+      const result = await verifyCapturedResponse(captured, {
+        method: "POST",
+        path: BUNDLE_APPROVAL_PATH,
+        phoneSharePackage,
+        requestServerNonce,
+        requestClientNonce
+      });
+      return validateResponseBody("bundle_approval_result_v1", result);
+    }
+  };
+}
+
+// Send and wait for the verified answer in one step, with the same share throughout. For callers that do not
+// need to survive an app lock between the two (the conformance tests).
+export async function submitBundleApproval(approval, phoneSharePackage, backendOrigin, options = {}) {
+  const sent = await dispatchBundleApproval(approval, phoneSharePackage, backendOrigin, options);
+  return sent.verify(await sent.response, phoneSharePackage);
 }

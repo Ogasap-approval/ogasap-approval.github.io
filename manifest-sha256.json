@@ -9,11 +9,11 @@
     },
     {
       "path": "index.html",
-      "sha256": "0fb8f9d244cfe4434749d6f77274fd79528c07c94f7849863c4aec68ac86c85c"
+      "sha256": "ddb85e24bb07925f06540f936ee353085a1b8cf4b7c7c63a5e7acb75cc3616cd"
     },
     {
       "path": "kernel.html",
-      "sha256": "ab085e1644a3ee785e1af4537b94899bb0f32f6d862335d704571c63bb4589ac"
+      "sha256": "217e61aa29de10402b0e7e946a455208095a86468bdc74b0c88cdba3d1004f67"
     },
     {
       "path": "manifest.webmanifest",
@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "3cce8db568220c15307a3cd7efe1c9383f5ad83487df6022e318d1b915f43f1b"
+      "sha256": "f5d8d923f5d1b5df3c0d7a5abd857a2542d2a053c15dfc88f7ee16bd4b7559ea"
     },
     {
       "path": "src/admin-request.js",
@@ -29,15 +29,23 @@
     },
     {
       "path": "src/api-client.js",
-      "sha256": "ba223e17ffefa754c04e4a153566d5476dd16b35667ddb5e04ee2207ee7784d3"
+      "sha256": "4d6bfbb1ff8a51916d6dbf2070f4a0b71d71cbc3ddd5f3c840d2e5e01d24c02b"
     },
     {
       "path": "src/app.js",
-      "sha256": "6675659f33940dd028289f160af1c988f20dcc6e78574cb60e97aa7094592af8"
+      "sha256": "1209e4d984c286670041d71d5cada35d672174f333d12483587b7102fdcf708d"
     },
     {
       "path": "src/approval-kernel.js",
-      "sha256": "22ee905f5da2f0ee4348f29e84096b5a3bc0ecb84c746225723c32da072f9f12"
+      "sha256": "5f85f25bdaddf1746a086034606f293cb3731964645c2ccb20140696d1901108"
+    },
+    {
+      "path": "src/approval-result-text.js",
+      "sha256": "b8bd3cabacadae409fe9ffdb2e57a8b2e8b93982e3cfa23e37a56592e08ac9ff"
+    },
+    {
+      "path": "src/approval-submission.js",
+      "sha256": "5155df4210b106b1f9ee706a805b09d803bfdec05d66e28bed9ed993794b4236"
     },
     {
       "path": "src/assets/icon.svg",
@@ -53,7 +61,7 @@
     },
     {
       "path": "src/bootstrap.js",
-      "sha256": "e193b74a1902b08b3d4089e31457d9635dd97271a3d7029d2eea240dfd19e76b"
+      "sha256": "e20f784f2d3b581ddeff4c4a4e9b38d82b64e2ec4e614def093c5e823403b325"
     },
     {
       "path": "src/core/crypto/bigint.js",
@@ -109,7 +117,7 @@
     },
     {
       "path": "src/integrity.js",
-      "sha256": "a7c2b0b9ec460f79251a203f5c6fafb433d12815a4bf20f0c44d4c13653762d1"
+      "sha256": "48208ecf7abf9b839cd13a3b54b0aa8c963029664d10a7ff492ef06ef82e738a"
     },
     {
       "path": "src/json-schema-validate.js",
@@ -117,7 +125,7 @@
     },
     {
       "path": "src/kernel-frame.js",
-      "sha256": "ab9cab249026cbe279abab3562c7f0f6dfd75770a2ef878ab71fd122b7f92cf6"
+      "sha256": "f45103b80274edc6a784fad5431390fe3165d2bd84d3719389aa83fef2d142bc"
     },
     {
       "path": "src/payment-grouping.js",
@@ -161,7 +169,11 @@
     },
     {
       "path": "src/styles.css",
-      "sha256": "2958a02b362aeee114cf6cbe491ef603d495483b93a49badba679caca8a4cf0c"
+      "sha256": "2bd929dbc385b91e4a764fc1e8fc9907be4cbd1423c1339fd929ae8fb005e181"
+    },
+    {
+      "path": "src/submission-guard.js",
+      "sha256": "35e1f8487012ee6c3dcaa752b6874594213b750c094fb5bdb5ed298be436bfb3"
     },
     {
       "path": "src/sw-integrity.js",
