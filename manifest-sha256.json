@@ -9,7 +9,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "ddb85e24bb07925f06540f936ee353085a1b8cf4b7c7c63a5e7acb75cc3616cd"
+      "sha256": "3fbc113a8e984407aabe54d131e83aabddc63ef7d8d1a7c2c786893c23715d71"
     },
     {
       "path": "kernel.html",
@@ -17,11 +17,11 @@
     },
     {
       "path": "manifest.webmanifest",
-      "sha256": "d03ba7cf747858d0328512b52699dd25a0abc5414fcaea6352e86f79d348c53a"
+      "sha256": "c2a13632e4a9dcef79c610a156f5c940a8dda9885b9ec59137e6eab91eb704d1"
     },
     {
       "path": "service-worker.js",
-      "sha256": "f5d8d923f5d1b5df3c0d7a5abd857a2542d2a053c15dfc88f7ee16bd4b7559ea"
+      "sha256": "f9f4e1ad09fa3c1b07ed7304cb3f25aaaf49a46b6168ae301451f1164d8bd58d"
     },
     {
       "path": "src/admin-request.js",

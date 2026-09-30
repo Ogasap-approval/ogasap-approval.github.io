@@ -1,6 +1,6 @@
 {
-  "name": "Approval",
-  "short_name": "Approval",
+  "name": "Pasago Approve",
+  "short_name": "Pasago Approve",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
