@@ -5,8 +5,10 @@ import {
   fetchRecentApprovals,
   pollMigration,
   requestMigration,
-  submitAdminApproval
+  submitAdminApproval,
+  submitBundleRejection
 } from "./api-client.js";
+import { createRejectionModal } from "./bundle-rejection.js";
 import { decodeEncryptedBackupQrV1, encryptBackupQrV1, validateEncryptedBackupQrV1 } from "./backup-recovery.js";
 import { utf8Decode } from "./core/crypto/bytes.js";
 import { decodePhoneSharePackageV1, signNordeaAdminInputV1 } from "./core/protocol/signing.js";
@@ -143,7 +145,12 @@ const ids = [
   "submissionTitle",
   "submissionPhase",
   "submissionClock",
-  "submissionLeave"
+  "submissionLeave",
+  "rejectModal",
+  "rejectModalText",
+  "rejectModalError",
+  "rejectCancelButton",
+  "rejectConfirmButton"
 ];
 const els = Object.fromEntries(ids.map((id) => [id, document.querySelector(`#${id}`)]));
 const appHeader = document.querySelector(".app-header");
@@ -166,6 +173,9 @@ const state = {
   recentApprovals: [],
   selectedApprovalId: "",
   approvedBundleIds: new Set(),
+  // Rejected from this phone: kept out of the list even if a poll that started before the rejection
+  // still has them as pending.
+  rejectedBundleIds: new Set(),
   activeView: "approval",
   resetArmed: false,
   resetTimer: 0,
@@ -301,6 +311,9 @@ function lockPrfSession(message = "App locked") {
   }
 
   clearPollTimer();
+  // An open confirmation goes with the lock, even one posting: it must not cover the unlock gate. The
+  // POST finishes on the share it was sent with.
+  rejection.dismiss();
   state.lockGeneration += 1;
   state.autoUnlockInFlight = false;
   state.phoneSharePackage = null;
@@ -910,8 +923,69 @@ function sendKernelState() {
     backendOrigin: state.backendOrigin,
     bundle: state.bundle,
     lastApprovalResult: state.lastApprovalResult,
-    approvedBundleIds: [...state.approvedBundleIds]
+    approvedBundleIds: [...state.approvedBundleIds],
+    // Open, or an attempt still out after a lock dismissed it: either way Approve stays off.
+    rejectionActive: rejection.isOpen() || rejection.isPending()
   }, kernelTargetOrigin());
+}
+
+// --- Rejecting a bundle -------------------------------------------------------
+//
+// The kernel freezes the bundle on "Afvis bundle" and posts it here; this asks for confirmation and sends
+// exactly that (bundle-rejection.js). While the modal is up, everything else is out of reach, the kernel
+// frame included, and the kernel keeps its Approve button off.
+const rejection = createRejectionModal({
+  els: {
+    modal: els.rejectModal,
+    text: els.rejectModalText,
+    error: els.rejectModalError,
+    cancel: els.rejectCancelButton,
+    confirm: els.rejectConfirmButton
+  },
+  setInert(on) {
+    for (const element of [appHeader, els.bundleQueue, els.adminRequestPanel, els.historyView, els.settingsView, els.kernelFrame]) {
+      if (element) {
+        element.inert = on;
+      }
+    }
+    sendKernelState();
+  },
+  send(body, { signal, assertStillValid }) {
+    // Read now, not when the modal opened: a lock in between takes the share out of memory. From here a
+    // lock stops anything not yet sent, and the answer is verified only with a share still unlocked.
+    const share = state.phoneSharePackage;
+    const backendOrigin = state.backendOrigin;
+    const lockGeneration = state.lockGeneration;
+    if (!share || !backendOrigin) {
+      return Promise.reject(new Error("share locked"));
+    }
+    const unlockedAsSent = () => state.lockGeneration === lockGeneration && Boolean(state.phoneSharePackage);
+    return submitBundleRejection(body, share, backendOrigin, {
+      signal,
+      assertStillValid: () => assertStillValid() && unlockedAsSent(),
+      currentShare: () => (unlockedAsSent() ? state.phoneSharePackage : null)
+    });
+  },
+  onSettled() {
+    sendKernelState();
+  },
+  onRejected(request, outcome) {
+    state.rejectedBundleIds.add(request.bundle_id);
+    state.pendingBundles = state.pendingBundles.filter((bundle) => bundle.bundle_id !== request.bundle_id);
+    selectPendingBundle(state.selectedBundleId === request.bundle_id ? state.pendingBundles[0]?.bundle_id ?? "" : state.selectedBundleId);
+    setStatus(outcome.alreadyRejected ? "Bundle var allerede afvist" : "Bundle afvist");
+    schedulePendingBundlePoll(1000);
+  }
+});
+
+function openRejection(request) {
+  // Never over an approval in flight: the kernel should not have asked, and the answer is the same.
+  if (state.approvalSubmissionActive || !request?.bundle_id || !request.bundle_hash) {
+    sendKernelState();
+    return;
+  }
+  rejection.open(request);
+  sendKernelState();
 }
 
 // --- The approval submission screen ------------------------------------------
@@ -997,6 +1071,8 @@ function handleKernelMessage(event) {
     selectPendingBundle(state.pendingBundles[0]?.bundle_id ?? "");
     sendKernelState();
     schedulePendingBundlePoll(1000);
+  } else if (event.data.type === "reject-requested") {
+    openRejection(event.data.request);
   } else if (event.data.type === "error") {
     state.lastApprovalResult = event.data.result ?? {
       status: "failed",
@@ -2557,7 +2633,8 @@ async function pollPendingBundlesOnce() {
     }
     state.recentApprovals = recentApprovals;
     renderRecentApprovals();
-    const pendingBundles = bundles.filter((bundle) => !state.approvedBundleIds.has(bundle.bundle_id));
+    const pendingBundles = bundles.filter((bundle) => !state.approvedBundleIds.has(bundle.bundle_id)
+      && !state.rejectedBundleIds.has(bundle.bundle_id));
     state.pendingBundles = pendingBundles;
     const selectedStillPending = pendingBundles.some((bundle) => bundle.bundle_id === state.selectedBundleId);
     const nextBundle = selectedStillPending
@@ -2666,6 +2743,17 @@ async function init() {
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !els.statusModal.classList.contains("hidden")) {
       hideStatusModal();
+    } else if (event.key === "Escape" && rejection.isOpen()) {
+      rejection.close();
+    }
+  });
+  els.rejectCancelButton.addEventListener("click", () => rejection.close());
+  els.rejectConfirmButton.addEventListener("click", () => {
+    rejection.confirm().catch((error) => setStatus(error.message, "error"));
+  });
+  els.rejectModal.addEventListener("click", (event) => {
+    if (event.target === els.rejectModal) {
+      rejection.close();
     }
   });
 

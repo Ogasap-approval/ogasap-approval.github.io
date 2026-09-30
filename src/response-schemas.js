@@ -169,6 +169,20 @@ export const RESPONSE_SCHEMAS = {
       bank_submission: { type: "object", additionalProperties: true }
     }
   }),
+  // POST /api/approval/bundle-rejection. A repeat for a bundle that is already rejected answers the same
+  // success with already_rejected: true, so a phone that lost the first answer can simply ask again.
+  bundle_rejection_result_v1: schema("bundle_rejection_result_v1", {
+    type: "object",
+    additionalProperties: false,
+    required: ["ok", "version", "bundle_id", "bundle_status", "already_rejected"],
+    properties: {
+      ok: { const: true },
+      version: { const: "bundle_rejection_result_v1" },
+      bundle_id: { type: "string", minLength: 8, maxLength: 128, pattern: "^[A-Za-z0-9._:-]+$" },
+      bundle_status: { const: "rejected" },
+      already_rejected: { type: "boolean" }
+    }
+  }),
   pending_admin_request_response_v1: schema("pending_admin_request_response_v1", {
     type: "object",
     additionalProperties: false,

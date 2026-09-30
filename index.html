@@ -8,7 +8,7 @@
     <title>Pasago Approve</title>
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" href="./src/assets/icon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="./src/styles.css" integrity="sha256-K9kp28OFuR5Kdk/B6PyZB75MvRQjwTOf2Smuj7AF4YE=" crossorigin="anonymous">
+    <link rel="stylesheet" href="./src/styles.css" integrity="sha256-MW/IhnYPzVSnFKqz1cXS7tY88gUS0qXq7sZd36fMF7s=" crossorigin="anonymous">
   </head>
   <body>
     <header class="app-header">
@@ -221,6 +221,18 @@
       </div>
     </div>
 
+    <div id="rejectModal" class="status-modal hidden" role="alertdialog" aria-modal="true" aria-labelledby="rejectModalTitle" aria-describedby="rejectModalText rejectModalError">
+      <div class="status-modal-panel">
+        <h2 id="rejectModalTitle">Afvis bundle</h2>
+        <p id="rejectModalText" class="status-modal-text">-</p>
+        <p id="rejectModalError" class="status-modal-text rejection-error hidden" role="alert"></p>
+        <div class="rejection-actions">
+          <button id="rejectCancelButton" type="button" class="secondary">Annuller</button>
+          <button id="rejectConfirmButton" type="button" class="danger">Afvis bundle</button>
+        </div>
+      </div>
+    </div>
+
     <div id="qrModal" class="status-modal hidden" role="dialog" aria-modal="true" aria-labelledby="qrModalTitle">
       <div class="status-modal-panel qr-modal-panel">
         <div class="status-modal-header">
@@ -250,6 +262,6 @@
     </div>
 
     <script type="module" src="./src/frame-buster.js" integrity="sha256-NGGj/MXF4iHcdjp4OpfS5DpLKE1iVHkIc5CEwIumT0k=" crossorigin="anonymous"></script>
-    <script type="module" src="./src/bootstrap.js" integrity="sha256-4g94Ty07WB3e/0xKTps42Ctk4uxOYU3vCTxegjQDsyU=" crossorigin="anonymous"></script>
+    <script type="module" src="./src/bootstrap.js" integrity="sha256-6oOZW4WMzA6B4H9uJ3RRM2TpGc0g0VoxI9KZiK+0Pc0=" crossorigin="anonymous"></script>
   </body>
 </html>

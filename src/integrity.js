@@ -22,6 +22,7 @@ export const APP_INTEGRITY_GRAPH = [
   "src/admin-request.js",
   "src/backup-recovery.js",
   "src/bank-signing-batch.js",
+  "src/bundle-rejection.js",
   "src/bootstrap.js",
   "src/frame-buster.js",
   "src/frame-messaging.js",

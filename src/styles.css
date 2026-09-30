@@ -46,6 +46,28 @@ button.secondary {
   color: var(--text);
 }
 
+button.danger {
+  background: var(--error);
+  color: #fff;
+}
+
+button.reject-button {
+  border: 1px solid var(--error);
+  background: #fff;
+  color: var(--error);
+}
+
+.rejection-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.rejection-error {
+  color: var(--error);
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.45;

@@ -1,4 +1,5 @@
 import { approveReviewedBundle, authorizePendingPayments } from "./approval-kernel.js";
+import { freezeRejection } from "./bundle-rejection.js";
 import {
   approvalLockedStatus,
   bankSubmissionText,
@@ -11,7 +12,7 @@ import {
 } from "./approval-result-text.js";
 import { settleSentApproval } from "./approval-submission.js";
 import { fetchPendingBundles, fetchRecentApprovals } from "./api-client.js";
-import { isTrustedFrameMessage } from "./frame-messaging.js";
+import { createLatestOnly, isTrustedFrameMessage } from "./frame-messaging.js";
 import { loadIntegrityManifest } from "./integrity.js";
 import { buildBundleRowModel, paymentCountMetricText } from "./payment-grouping.js";
 import { amountMinorToDecimal } from "./payment-view.js";
@@ -28,6 +29,7 @@ const ids = [
   "totalsStrip",
   "paymentRows",
   "approveButton",
+  "rejectButton",
   "resultPanel",
   "resultTitle",
   "resultDetail",
@@ -60,8 +62,14 @@ const state = {
   sentAt: 0,
   shareWaiters: [],
   // A sent approval whose outcome could not be confirmed: its bundle stays un-approvable here until checked.
-  unresolvedApproval: null
+  unresolvedApproval: null,
+  // The shell's rejection modal is open or its POST is in flight (sent in "state"). Approving is off
+  // meanwhile, as rejecting is while an approval runs: the two must never race over one bundle.
+  rejectionActive: false
 };
+// Validating a bundle is async, so an older "state" can finish after a newer one; only the latest may set
+// the bundle, or a bundle the shell has just removed (rejected) could come back.
+const stateUpdates = createLatestOnly();
 
 function post(type, fields = {}) {
   window.parent.postMessage({ source: "approval-kernel", type, ...fields }, PARENT_ORIGIN);
@@ -290,8 +298,35 @@ function setButtonState() {
     els.approveButton.style.removeProperty("--approval-progress");
     els.approveButton.title = "";
   }
-  els.approveButton.disabled = state.busy || approved || currentBundleUnresolved() || !state.phoneSharePackage || !state.webauthnCredential || !state.backendOrigin || !state.bundle;
+  els.approveButton.disabled = state.busy || state.rejectionActive || approved || currentBundleUnresolved() || !state.phoneSharePackage || !state.webauthnCredential || !state.backendOrigin || !state.bundle;
+  els.rejectButton.disabled = !canRequestRejection();
   els.approveButton.textContent = approved ? "Approved" : showProgress ? approvalProgressText(state.approvalProgress, { multiline: true }) : "Approve";
+}
+
+// Rejection needs no WebAuthn credential (it cannot move money), only the share to sign the request. Not
+// for a bundle this phone approved or whose approval is unconfirmed: the server would refuse it anyway,
+// and offering it would suggest the approval could be undone.
+function canRequestRejection() {
+  return Boolean(state.bundle && shareReady() && !state.busy && !state.rejectionActive
+    && !currentBundleApproved() && !currentBundleUnresolved());
+}
+
+function requestRejection() {
+  if (!canRequestRejection()) {
+    return;
+  }
+  // Frozen HERE, before anything async, as approveBundle captures its bundle: the shell posts exactly
+  // what was on screen when the holder tapped, whatever the poll shows by the time they confirm.
+  let request;
+  try {
+    request = freezeRejection(state.bundle);
+  } catch (error) {
+    setStatus(`Bundlen kan ikke afvises: ${error.message}`, "error");
+    return;
+  }
+  state.rejectionActive = true;
+  setButtonState();
+  post("reject-requested", { request });
 }
 
 function renderRecheck() {
@@ -378,6 +413,7 @@ function renderBundle() {
 }
 
 async function applyState(message) {
+  const update = stateUpdates.begin();
   const nextPhoneSharePackage = message.phoneSharePackage ?? null;
   const locking = Boolean(state.phoneSharePackage && !nextPhoneSharePackage);
   if (locking) {
@@ -392,6 +428,7 @@ async function applyState(message) {
   state.backendOrigin = message.backendOrigin ?? "";
   state.lastApprovalResult = Object.hasOwn(message, "lastApprovalResult") ? message.lastApprovalResult : state.lastApprovalResult;
   state.approvedBundleIds = new Set(message.approvedBundleIds ?? []);
+  state.rejectionActive = Boolean(message.rejectionActive);
   if (locking && state.sentAt) {
     setStatus(approvalLockedStatus(), "warning");
   }
@@ -399,7 +436,17 @@ async function applyState(message) {
   releaseShareWaiters();
 
   if (message.bundle) {
-    await validateBundleForApprovalV1(message.bundle);
+    try {
+      await validateBundleForApprovalV1(message.bundle);
+    } catch (error) {
+      if (!stateUpdates.isCurrent(update)) {
+        return;
+      }
+      throw error;
+    }
+  }
+  if (!stateUpdates.isCurrent(update)) {
+    return;
   }
   state.bundleError = "";
   state.bundle = message.bundle ?? null;
@@ -616,7 +663,7 @@ async function settleApproval(record) {
 }
 
 async function approveBundle() {
-  if (!state.phoneSharePackage || !state.webauthnCredential || !state.backendOrigin || !state.bundle || currentBundleApproved() || currentBundleUnresolved()) {
+  if (state.rejectionActive || !state.phoneSharePackage || !state.webauthnCredential || !state.backendOrigin || !state.bundle || currentBundleApproved() || currentBundleUnresolved()) {
     return;
   }
 
@@ -755,6 +802,10 @@ window.addEventListener("message", (event) => {
 
 els.approveButton.addEventListener("click", () => {
   approveBundle();
+});
+
+els.rejectButton.addEventListener("click", () => {
+  requestRejection();
 });
 
 els.recheckButton.addEventListener("click", () => {

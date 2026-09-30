@@ -16,6 +16,7 @@ const PENDING_BUNDLES_PATH = "/api/approval/pending-bundles";
 const RECENT_APPROVALS_PATH = "/api/approval/recent-approvals";
 const BACKEND_AUTH_NONCE_PATH = "/api/approval/backend-auth-nonce";
 const BUNDLE_APPROVAL_PATH = "/api/approval/bundle-approval";
+const BUNDLE_REJECTION_PATH = "/api/approval/bundle-rejection";
 const WEBAUTHN_CHALLENGE_NONCE_PATH = "/api/approval/webauthn-challenge-nonce";
 const ENROLL_CREDENTIAL_PATH = "/api/approval/enroll-credential";
 const MIGRATION_REQUEST_PATH = "/api/approval/migration-request";
@@ -119,8 +120,13 @@ function assertBackendResponseAttestation(attestation, expected) {
   }
 }
 
-async function verifyBackendResponseAttestation({ response, bodyBytes, phoneSharePackage, method, path, requestServerNonce, requestClientNonce }) {
+// `assertStillValid` (optional) throws to stop: it runs after every await here and inside the phone
+// signature, so a lock at any point leaves the answer unverified and the share unused from then on.
+async function verifyBackendResponseAttestation({ response, bodyBytes, phoneSharePackage, method, path, requestServerNonce, requestClientNonce, assertStillValid }) {
   const bodySha256 = await sha256Hex(bodyBytes);
+  if (typeof assertStillValid === "function") {
+    assertStillValid();
+  }
   const attestation = decodeBackendResponseHeader(response);
   const upperMethod = method.toUpperCase();
   const expected = {
@@ -143,7 +149,7 @@ async function verifyBackendResponseAttestation({ response, bodyBytes, phoneShar
     response_timestamp: attestation.response_timestamp
   };
   const phoneShare = decodePhoneSharePackageV1(phoneSharePackage);
-  const phoneSigned = await signBackendResponseEnvelopeV1(envelope, phoneSharePackage);
+  const phoneSigned = await signBackendResponseEnvelopeV1(envelope, phoneSharePackage, guardedSigningOptions(assertStillValid));
   const companyShares = attestation.company_sign_shares_base64url.map((share) => {
     const parsed = unmarshalSignShare(base64urlToBytes(share));
     if (parsed.trailingBytes.length !== 0) {
@@ -160,6 +166,9 @@ async function verifyBackendResponseAttestation({ response, bodyBytes, phoneShar
   }
 
   const paddedDigest = await pkcs1v15PaddedMessageForModulus(phoneSigned.canonical_envelope, phoneShare.modulus);
+  if (typeof assertStillValid === "function") {
+    assertStillValid();
+  }
   combineSignShares({
     modulus: phoneShare.modulus,
     publicExponent: phoneShare.publicExponent,
@@ -186,7 +195,8 @@ async function verifyCapturedResponse(captured, {
   path,
   phoneSharePackage,
   requestServerNonce = "-",
-  requestClientNonce = "-"
+  requestClientNonce = "-",
+  assertStillValid
 }) {
   const bodyBytes = utf8Encode(captured.bodyText);
   const body = parseJsonBody(captured, captured.bodyText);
@@ -197,7 +207,8 @@ async function verifyCapturedResponse(captured, {
     method,
     path,
     requestServerNonce,
-    requestClientNonce
+    requestClientNonce,
+    assertStillValid
   });
   if (!captured.ok) {
     throwBackendError(captured, body);
@@ -217,7 +228,11 @@ function backendAuthHeaderValue(envelope) {
   return bytesToBase64url(utf8Encode(JSON.stringify(envelope)));
 }
 
-async function fetchBackendAuthNonce({ method, path, phoneSharePackage, backendOrigin }) {
+// `signal` and `assertStillValid` are optional (the rejection uses them): the first stops the fetch, the
+// second is checked after every await of the answer's verification, before the share is read or signs, so
+// a lock during the round-trip or the crypto ends it without the share being touched again.
+async function fetchBackendAuthNonce({ method, path, phoneSharePackage, backendOrigin, signal, assertStillValid }) {
+  const guard = notSentGuard(assertStillValid);
   const response = await fetch(apiUrl(BACKEND_AUTH_NONCE_PATH, {
     method,
     path,
@@ -230,12 +245,15 @@ async function fetchBackendAuthNonce({ method, path, phoneSharePackage, backendO
     headers: {
       "Accept": "application/json"
     },
-    cache: "no-store"
+    cache: "no-store",
+    ...(signal ? { signal } : {})
   });
-  const body = await verifiedJsonResponse(response, {
+  const captured = await captureResponse(response);
+  const body = await verifyCapturedResponse(captured, {
     method: "GET",
     path: BACKEND_AUTH_NONCE_PATH,
-    phoneSharePackage
+    phoneSharePackage,
+    assertStillValid: guard
   });
   validateResponseBody("backend_auth_nonce_response_v1", body);
   return body.server_nonce;
@@ -499,15 +517,52 @@ export async function pollMigration(migrationId, phoneSharePackage, backendOrigi
   return validateResponseBody("migration_status_response_v1", result);
 }
 
-async function signedApprovalHeaders({ method, path, bodyBytes = EMPTY_BODY, phoneSharePackage, backendOrigin }) {
+// Signing options for a share that must stop the moment the app locks, without touching the core (whose
+// hash is the protocol release id). `guard()` throws; it runs at the blinding draw, the last step before
+// the share's exponentiation and after every await inside the signature, so a locked share never signs.
+function guardedSigningOptions(guard) {
+  if (typeof guard !== "function") {
+    return {};
+  }
+  const base = globalThis.crypto;
+  return {
+    cryptoProvider: {
+      subtle: base.subtle,
+      getRandomValues(array) {
+        guard();
+        return base.getRandomValues(array);
+      }
+    }
+  };
+}
+
+// A false `assertStillValid()` throws ApprovalNotSentError: it is checked after every await, up to and
+// inside the backend-auth signature.
+function notSentGuard(assertStillValid) {
+  if (typeof assertStillValid !== "function") {
+    return undefined;
+  }
+  return () => {
+    if (!assertStillValid()) {
+      throw new ApprovalNotSentError();
+    }
+  };
+}
+
+async function signedApprovalHeaders({ method, path, bodyBytes = EMPTY_BODY, phoneSharePackage, backendOrigin, signal, assertStillValid }) {
+  const guard = notSentGuard(assertStillValid);
   const upperMethod = method.toUpperCase();
   const bodySha256 = await sha256Hex(bodyBytes);
+  guard?.();
   const serverNonce = await fetchBackendAuthNonce({
     method: upperMethod,
     path,
     phoneSharePackage,
-    backendOrigin
+    backendOrigin,
+    signal,
+    assertStillValid
   });
+  guard?.();
   const clientNonce = randomNonce();
   const envelope = {
     method: upperMethod,
@@ -523,7 +578,7 @@ async function signedApprovalHeaders({ method, path, bodyBytes = EMPTY_BODY, pho
     server_nonce: serverNonce,
     client_nonce: clientNonce
   };
-  const signed = await signBackendAuthEnvelopeV1(envelope, phoneSharePackage);
+  const signed = await signBackendAuthEnvelopeV1(envelope, phoneSharePackage, guardedSigningOptions(guard));
 
   return {
     serverNonce,
@@ -691,4 +746,70 @@ function sentBundleApproval(response, { sentAt, requestServerNonce, requestClien
 export async function submitBundleApproval(approval, phoneSharePackage, backendOrigin, options = {}) {
   const sent = await dispatchBundleApproval(approval, phoneSharePackage, backendOrigin, options);
   return sent.verify(await sent.response, phoneSharePackage);
+}
+
+/**
+ * Reject a pending bundle: `{ bundle_id, bundle_hash }`, where bundle_hash is the bundle's
+ * bundle_hash_sha256 as it was shown, so the server refuses (bundle_hash_mismatch) a bundle that changed
+ * underneath the holder. Resolves with the verified bundle_rejection_result_v1.
+ *
+ * Needs no WebAuthn gesture: rejecting cannot move money. Safe to repeat: a bundle already rejected
+ * answers the same success with already_rejected: true. A refusal throws with `companySigned` set, as
+ * every verified error does; anything else thrown (network, an unverifiable answer) leaves the outcome
+ * unknown.
+ *
+ * Options, all for an app that can lock underneath it:
+ *   assertStillValid  checked after every await before the POST (nonce verification and signing included,
+ *                     right up to the share signature) and right before the POST; false throws
+ *                     ApprovalNotSentError and nothing is sent
+ *   signal            aborts the nonce fetch and the POST
+ *   currentShare      () => the share to verify the answer with, read when it arrives (null while locked,
+ *                     which leaves the outcome unknown), and re-read after every await of the verification.
+ *                     When given, this call lets go of the share it was handed the moment the POST is sent.
+ */
+export async function submitBundleRejection(rejection, phoneSharePackage, backendOrigin, { assertStillValid, signal, currentShare } = {}) {
+  const stillValid = () => typeof assertStillValid !== "function" || assertStillValid();
+  const body = JSON.stringify({ bundle_id: rejection.bundle_id, bundle_hash: rejection.bundle_hash });
+  const auth = await signedApprovalHeaders({
+    method: "POST",
+    path: BUNDLE_REJECTION_PATH,
+    bodyBytes: utf8Encode(body),
+    phoneSharePackage,
+    backendOrigin,
+    signal,
+    assertStillValid: stillValid
+  });
+  // LAST controllable moment: nothing between this check and fetch() awaits.
+  if (!stillValid()) {
+    throw new ApprovalNotSentError();
+  }
+  const shareToVerify = typeof currentShare === "function" ? currentShare : () => phoneSharePackage;
+  if (typeof currentShare === "function") {
+    phoneSharePackage = null;
+  }
+  const captured = await captureResponse(await fetch(apiUrl(BUNDLE_REJECTION_PATH, {}, backendOrigin), {
+    method: "POST",
+    headers: { ...auth.headers, "Content-Type": "application/json" },
+    body,
+    cache: "no-store",
+    ...(signal ? { signal } : {})
+  }));
+  // Sent: a lock from here on leaves the outcome unknown (a plain Error), and it is re-read after every
+  // await of the verification, so a lock during the crypto stops the share being used.
+  const share = shareToVerify();
+  const shareStillCurrent = () => {
+    if (!share || shareToVerify() !== share) {
+      throw new Error("the app locked before the answer could be verified");
+    }
+  };
+  shareStillCurrent();
+  const result = await verifyCapturedResponse(captured, {
+    method: "POST",
+    path: BUNDLE_REJECTION_PATH,
+    phoneSharePackage: share,
+    requestServerNonce: auth.serverNonce,
+    requestClientNonce: auth.clientNonce,
+    assertStillValid: shareStillCurrent
+  });
+  return validateResponseBody("bundle_rejection_result_v1", result);
 }

@@ -15,3 +15,19 @@ export function isTrustedFrameMessage(event, { source, origin, kind } = {}) {
   }
   return event.data?.source === kind;
 }
+
+// Latest-wins for messages whose handling awaits: `begin()` on arrival, and after any await apply only
+// if `isCurrent(token)`. Without it an older "state" whose bundle validation finishes last would
+// overwrite a newer one, bringing back a bundle the shell had already removed.
+export function createLatestOnly() {
+  let latest = 0;
+  return {
+    begin() {
+      latest += 1;
+      return latest;
+    },
+    isCurrent(token) {
+      return token === latest;
+    }
+  };
+}
