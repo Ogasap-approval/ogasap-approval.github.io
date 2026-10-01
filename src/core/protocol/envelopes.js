@@ -14,6 +14,13 @@ const AMOUNT_MINOR = /^[0-9]+$/u;
 const AMOUNT_DECIMAL = /^(0|[1-9][0-9]*)(\.[0-9]{1,2})?$/u;
 const BBAN_VALUE = /^[0-9]{14}$/u;
 const DISPLAY_UNSAFE = /[\p{Cc}\p{Cf}\p{Cs}\p{Noncharacter_Code_Point}]/u;
+// Nordea's InstantCreditorAddressDk rules, confirmed against the sandbox: an uppercase ISO 3166 alpha-2
+// country and a 1..35 character town from a fixed character set. Both anchored over the WHOLE string
+// (Nordea's own pattern anchors only its empty alternative at the start). A town may contain a space,
+// but not start with one and no other whitespace.
+const ADDRESS_COUNTRY = /^[A-Z]{2}$/u;
+const ADDRESS_TOWN_CHARS = "A-Za-z0-9_\u00e4\u00c4\u00e5\u00c5\u00f6\u00d6\u00e6\u00c6\u00f8\u00d8.,:\\-+'/()?;*!%&=@";
+const ADDRESS_TOWN = new RegExp(`^[${ADDRESS_TOWN_CHARS}][${ADDRESS_TOWN_CHARS} ]{0,34}$`, "u");
 const MAX_BANK_BODY_FIELD = 256;
 const MAX_AMOUNT_MINOR = 10n ** 15n;
 const PRINTABLE_ASCII = /^[\x20-\x7e]*$/u;
@@ -747,7 +754,7 @@ function parseBankBodyV1(bodyBytes) {
     throw new RangeError("debtor.account.currency must be \"DKK\"");
   }
 
-  assertModeledObject("creditor", body.creditor, ["name", "account"], ["bank", "message"]);
+  assertModeledObject("creditor", body.creditor, ["name", "account"], ["address_details", "bank", "message"]);
   assertDisplaySafeText("creditor.name", body.creditor.name, 140);
   if (body.creditor.name.length < 1) {
     throw new RangeError("creditor.name is required");
@@ -762,6 +769,18 @@ function parseBankBodyV1(bodyBytes) {
       throw new RangeError("creditor.bank.country must be \"DK\"");
     }
     assertOptionalDisplaySafeText("creditor.bank", body.creditor.bank, "bank_code", 16);
+  }
+  if (hasOwn(body.creditor, "address_details")) {
+    // Signed but NOT displayed: like end_to_end_id and debtor.own_reference it is bound to the approval
+    // through the body hash only, and never enters the visible payment. It does not route the money.
+    const address = body.creditor.address_details;
+    assertModeledObject("creditor.address_details", address, ["country", "town"], []);
+    if (typeof address.country !== "string" || !ADDRESS_COUNTRY.test(address.country)) {
+      throw new RangeError("creditor.address_details.country must be an ISO 3166 alpha-2 code");
+    }
+    if (typeof address.town !== "string" || !ADDRESS_TOWN.test(address.town)) {
+      throw new RangeError("creditor.address_details.town must be 1..35 characters Nordea accepts");
+    }
   }
 
   return body;
