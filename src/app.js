@@ -22,7 +22,15 @@ import {
 } from "./admin-request.js";
 import { authorizePendingPayments } from "./approval-kernel.js";
 import { SUBMISSION_SCREEN_TITLE, submissionScreenText } from "./approval-result-text.js";
-import { createPollScheduler, createScreenWakeLock } from "./submission-guard.js";
+import {
+  ADMIN_FETCH_TIMEOUT_MS,
+  createAdminRenewalPass,
+  createBankAccessGuard,
+  createPollScheduler,
+  createScreenWakeLock,
+  withBankAccessWarning,
+  withTimeout
+} from "./submission-guard.js";
 import {
   createMultipartReassembler,
   MULTIPART_PREFIX
@@ -195,11 +203,7 @@ const state = {
   approvalSubmissionActive: false,
   lockGeneration: 0,
   autoUnlockInFlight: false,
-  autoUnlockAttemptedGeneration: -1,
-  // A background bank-setup chain is running. The poll fires every three seconds and a chain takes
-  // several round-trips, so without this a second poll would land mid-chain and be refused by the
-  // controller — noisily, in a status line nobody asked for.
-  adminAutoSignInFlight: false
+  autoUnlockAttemptedGeneration: -1
 };
 
 function setStatus(message, level = "normal") {
@@ -331,6 +335,7 @@ function lockPrfSession(message = "App locked") {
   state.selectedApprovalId = "";
   // A pending bank-admin request must not survive a lock: it was fetched for an unlocked device.
   adminRequests.clear();
+  bankAccess.invalidate();
   stopQrScanner();
   renderEnrollment();
   renderRecentApprovals();
@@ -719,7 +724,7 @@ function selectPendingBundle(bundleId, options = {}) {
   renderBundleQueue();
   sendKernelState();
   if (options.userSelected && bundle) {
-    setStatus(`Reviewing ${shortBundleId(bundle.bundle_id)}`);
+    setBundleStatus(`Reviewing ${shortBundleId(bundle.bundle_id)}`);
   }
 }
 
@@ -911,6 +916,29 @@ function renderActivityDetail() {
   renderPaymentRows(els.activityDetailRows, detailRows.rows);
 }
 
+// The hold on Approve while bank access is renewed, and the one admin pass behind it. A change in what it
+// holds is sent straight to the kernel, and the status line follows it while a bundle is waiting.
+const bankAccess = createBankAccessGuard({
+  runPass: (pass) => refreshPendingAdminRequest(pass),
+  onChange: () => {
+    sendKernelState();
+    if (state.bundle && bankAccess.state !== "renewing") {
+      setBundleReadyStatus(state.pendingBundles.length);
+    }
+  }
+});
+
+function setBundleReadyStatus(count) {
+  setBundleStatus(count > 1 ? `${count} bundles ready for review` : "Bundle ready for review");
+}
+
+// Every status line written about a bundle on screen goes through here, so the unconfirmed-renewal warning
+// is never replaced by routine text while Approve is enabled under it.
+function setBundleStatus(message) {
+  const status = withBankAccessWarning(bankAccess.state, message);
+  setStatus(status.message, status.level);
+}
+
 function sendKernelState() {
   if (!state.kernelReady || !els.kernelFrame.contentWindow) {
     return;
@@ -925,7 +953,9 @@ function sendKernelState() {
     lastApprovalResult: state.lastApprovalResult,
     approvedBundleIds: [...state.approvedBundleIds],
     // Open, or an attempt still out after a lock dismissed it: either way Approve stays off.
-    rejectionActive: rejection.isOpen() || rejection.isPending()
+    rejectionActive: rejection.isOpen() || rejection.isPending(),
+    // "renewing" holds Approve until this phone has renewed the bank access (see submission-guard.js).
+    bankAccessState: bankAccess.state
   }, kernelTargetOrigin());
 }
 
@@ -1334,8 +1364,10 @@ async function enrollFromPackage(pkg) {
   // Enrolling REPLACES the signing context, and the controls stay reachable while already enrolled.
   // Invalidate here, before any await: a request fetched under the previous share package must not
   // remain displayed or become signable under the new one, and an approval already in flight under
-  // the old package must be abandoned rather than completed.
+  // the old package must be abandoned rather than completed. The hold is KEPT: if this enrollment fails
+  // or is cancelled, the old share is still installed and still needs it.
   adminRequests.clear();
+  bankAccess.cancelPasses();
   validateEnrollmentPackage(pkg);
   const credential = await createApprovalCredential({
     approverId: pkg.approver_id,
@@ -1348,6 +1380,13 @@ async function enrollFromPackage(pkg) {
   } : {});
   const storedCredential = storableCredentialRecord(credential, prfWrap);
   await saveWebAuthnCredential(storedCredential);
+  // The new context begins HERE, synchronously, with no await before the share is installed: every state
+  // sent to the kernel from now on carries the hold, and no bundle shown for the previous share is ever
+  // published beside the new one. (A poll that started under the old share is discarded on return.)
+  bankAccess.beginContext();
+  state.bundle = null;
+  state.pendingBundles = [];
+  state.selectedBundleId = "";
   state.phoneSharePackage = pkg;
   state.webauthnCredential = storedCredential;
   state.shareStorageRequiresPrfUnlock = Boolean(prfWrap);
@@ -1379,7 +1418,6 @@ async function enrollFromPackage(pkg) {
     });
   }
   pollPendingBundles();
-  refreshPendingAdminRequest().catch(() => {});
   recoverPendingPaymentAuthorization().catch(() => {});
 }
 
@@ -1436,10 +1474,15 @@ async function unlockPrfShare() {
   });
   state.prfWrapKey = prfWrapKey;
   state.prfSaltBase64url = saltBase64url;
-  state.phoneSharePackage = await loadPhoneSharePackage({ prfWrapKey });
-  if (!state.phoneSharePackage) {
+  const sharePackage = await loadPhoneSharePackage({ prfWrapKey });
+  if (!sharePackage) {
+    state.phoneSharePackage = null;
     throw new Error("Share unlock failed");
   }
+  // Synchronously before the share is installed, as at enrollment: from here on the kernel is only ever
+  // told about this share together with the hold on Approve.
+  bankAccess.beginContext();
+  state.phoneSharePackage = sharePackage;
   state.backendOriginRequiresPrfUnlock = await backendOriginRequiresPrfUnlock().catch(() => false);
   state.backendOrigin = await loadBackendOrigin({ prfWrapKey }).catch(() => "");
   if (state.backendOrigin && !state.backendOriginRequiresPrfUnlock) {
@@ -1566,6 +1609,11 @@ async function saveBackendFromSettings() {
   // Different backend, different trust context: anything fetched from the previous one is discarded
   // rather than left approvable against the new one.
   adminRequests.clear();
+  if (state.phoneSharePackage) {
+    bankAccess.beginContext();
+  } else {
+    bankAccess.invalidate();
+  }
   renderAdminRequest();
   renderEnrollment();
   setStatus("Backend saved");
@@ -1958,8 +2006,10 @@ async function resetEnrollment() {
 
   // Invalidate at the moment the transition commits, ahead of the asynchronous authorization and
   // storage deletion below. Clearing only after those awaits leaves a window in which an approval
-  // can still complete against a context the user has already torn down.
+  // can still complete against a context the user has already torn down. The hold is kept until the
+  // share is actually gone below: a reset cancelled at WebAuthn leaves it installed.
   adminRequests.clear();
+  bankAccess.cancelPasses();
   clearResetArming();
   await authorizeEnrollmentReset();
   clearPollTimer();
@@ -1974,6 +2024,7 @@ async function resetEnrollment() {
   state.recentApprovals = [];
   state.selectedApprovalId = "";
   adminRequests.clear();
+  bankAccess.invalidate();
   state.pendingQrPackage = null;
   state.qrEnrollPending = false;
   state.shareStorageRequiresPrfUnlock = false;
@@ -2002,16 +2053,18 @@ const bundlePoll = createPollScheduler({
   intervalMs: POLL_INTERVAL_MS,
   canSchedule: () => Boolean(state.phoneSharePackage && state.backendOrigin),
   run: async ({ scheduled }) => {
+    // On EVERY run, the direct one an unlock makes included. Checking only on timed ticks is what let a
+    // holder approve and leave before the first check: the approval pauses this loop, so the first tick
+    // after an unlock-and-approve came too late (2026-10-18). The guard joins a pass already running.
+    bankAccess.poll();
     const polled = pollPendingBundlesOnce();
     if (scheduled) {
-      // Admin requests are created by an operator at an arbitrary moment; fetching them only right
-      // after enrollment meant a request raised while the app was already open would never appear.
-      refreshPendingAdminRequest().catch(() => {});
       recoverPendingPaymentAuthorization().catch(() => {});
     }
     return polled;
   }
 });
+
 
 // Drops the timer and any queued follow-up (app lock, reset). Does not pause.
 function clearPollTimer() {
@@ -2326,50 +2379,34 @@ function renderAdminRequest() {
 // Ordering lives in admin-request.js, tested in test/pwa-admin-request.test.mjs. app.js only
 // renders, so a stale fetch or an overlapping refresh has nowhere here to go wrong.
 const adminRequests = createAdminRequestController({
-  fetchPendingAdminRequest: () => fetchPendingAdminRequest(state.phoneSharePackage, state.backendOrigin),
+  fetchPendingAdminRequest: () => withTimeout(
+    fetchPendingAdminRequest(state.phoneSharePackage, state.backendOrigin),
+    ADMIN_FETCH_TIMEOUT_MS
+  ),
   validateAdminInput: (input) => validateNordeaAdminSigningInputV1(input)
 });
 
-async function refreshPendingAdminRequest() {
+// THE WHOLE CHANGE, IN ONE LINE. What was a request waiting for a tap is now a request waiting for a
+// poll. Everything the bank setup needs — the six-step chain, and the access-token renewal that recurs
+// for the life of the integration — is signed by this pass, in the background, for as long as somebody
+// has this app open with their share unlocked. It renders BEFORE it signs: if the request turns out to be
+// one this build will not sign unattended, the panel is already up and a human is already looking at it.
+const adminRenewalPass = createAdminRenewalPass({
+  controller: adminRequests,
+  render: () => renderAdminRequest(),
+  runChain: ({ isCurrent }) => runAdminChain({ automatic: true, isCurrent })
+});
+
+// ONE PASS, run by bankAccess on every poll (createAdminRenewalPass, tested in
+// test/bank-access-guard.test.mjs). Resolves to what the LAST check of the pass saw, which is what decides
+// whether Approve is released.
+async function refreshPendingAdminRequest(pass = {}) {
   if (!state.phoneSharePackage || !state.backendOrigin) {
     adminRequests.clear();
     renderAdminRequest();
-    return;
+    return null;
   }
-  // A chain in flight runs its own refresh before every step, and the poll fires every three
-  // seconds. Letting the poll refresh underneath it would replace the tuple the chain is walking
-  // with a newer one mid-sequence — harmless, because approve() signs the tuple it captured and
-  // `accept` bounds every step either way, but pointless churn against the backend and a confusing
-  // thing to read in a network log.
-  if (state.adminAutoSignInFlight) return;
-  await adminRequests.refresh();
-  renderAdminRequest();
-  // THE WHOLE CHANGE, IN ONE LINE. What was a request waiting for a tap is now a request waiting
-  // for a poll. Everything the bank setup needs — the six-step chain, and the access-token renewal
-  // that recurs for the life of the integration — is signed here, in the background, for as long as
-  // somebody has this app open with their share unlocked.
-  //
-  // Deliberately AFTER the render: if the request turns out to be one this build will not sign
-  // unattended, the panel is already up and a human is already looking at it.
-  await autoSignPendingAdminRequest();
-}
-
-// Sign whatever the service has minted, if and only if this build is allowed to sign it unattended.
-//
-// The gate is `snap.autoSignable`, derived in admin-request.js from the SAME action object the panel
-// would render — which is itself derived from the bytes that will be signed. So there is no path by
-// which a request the phone would have shown a human gets signed without one; the two answers come
-// from one value.
-async function autoSignPendingAdminRequest() {
-  if (state.adminAutoSignInFlight) return;
-  const snap = adminRequests.snapshot();
-  if (!snap.visible || !snap.canApprove || !snap.autoSignable) return;
-  state.adminAutoSignInFlight = true;
-  try {
-    await runAdminChain({ automatic: true });
-  } finally {
-    state.adminAutoSignInFlight = false;
-  }
+  return adminRenewalPass(pass);
 }
 
 // The bundles THIS holder approved, as far as this phone can tell.
@@ -2484,7 +2521,7 @@ const ADMIN_OUTCOMES_WORTH_SAYING = Object.freeze(new Set([
  *            and is owed the sight of it. An automatic run has no such debt; it only keeps the
  *            panel's rendered action current for anyone who happens to be looking.
  */
-async function runAdminChain({ automatic = false } = {}) {
+async function runAdminChain({ automatic = false, isCurrent = () => true } = {}) {
   // Capture the signing context ONCE, here. Reading state.phoneSharePackage / state.backendOrigin
   // after an await would let a share signed for one backend be submitted to another if the origin
   // changed mid-signature; the controller's epoch check then refuses the submission outright.
@@ -2503,6 +2540,7 @@ async function runAdminChain({ automatic = false } = {}) {
     // where a human reads it — a backend cannot walk a phone somewhere new, gesture or no gesture.
     const outcome = await adminRequests.approveChain({
       context,
+      isCurrent,
       accept: automatic
         ? mayAutoSignAdminAction
         : (action) => Object.hasOwn(ADMIN_ACTION_LABELS, action?.action),
@@ -2523,6 +2561,8 @@ async function runAdminChain({ automatic = false } = {}) {
       )
     });
     const done = outcome.steps?.length ?? 0;
+    // A superseded background pass says nothing: the pass that replaced it speaks for this context.
+    if (!isCurrent()) return;
     if (!outcome.ok) {
       // A FAILURE IS ALWAYS SAID, automatic or not. Silence is what the background is for; a bank
       // setup that stopped going is the case where invisibility becomes the problem rather than the
@@ -2652,7 +2692,7 @@ async function pollPendingBundlesOnce() {
     }
 
     selectPendingBundle(nextBundle.bundle_id);
-    setStatus(pendingBundles.length > 1 ? `${pendingBundles.length} bundles ready for review` : "Bundle ready for review");
+    setBundleReadyStatus(pendingBundles.length);
   } catch (error) {
     setStatus(`Approval polling failed: ${error.message}`, "error");
   }
@@ -2832,14 +2872,15 @@ async function init() {
     publicOnly: state.shareStorageRequiresPrfUnlock
   }).catch(() => null);
   state.backendOriginRequiresPrfUnlock = await backendOriginRequiresPrfUnlock().catch(() => false);
-  state.phoneSharePackage = state.shareStorageRequiresPrfUnlock ? null : await loadPhoneSharePackage().catch(() => null);
+  const storedShare = state.shareStorageRequiresPrfUnlock ? null : await loadPhoneSharePackage().catch(() => null);
+  if (storedShare) bankAccess.beginContext();
+  state.phoneSharePackage = storedShare;
   state.backendOrigin = state.shareStorageRequiresPrfUnlock || state.backendOriginRequiresPrfUnlock ? "" : await loadBackendOrigin().catch(() => "");
   renderEnrollment();
   renderRecentApprovals();
   sendKernelState();
   showView(routeFromLocation(), { history: "replace" });
   await pollPendingBundles();
-  await refreshPendingAdminRequest().catch(() => {});
   await recoverPendingPaymentAuthorization().catch(() => {});
 }
 

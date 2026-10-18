@@ -201,6 +201,9 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
   let approving = false;
 
   const controller = {
+    // Resolves to WHAT THIS FETCH SAW — { fetched, current, hasRequest, suppression, flowProgress } —
+    // so a caller can tell "the service said nothing is wanted" from "the fetch failed" or "a newer
+    // refresh overtook this one". The controller's own state handling does not depend on it.
     async refresh() {
       const startedAt = ++generation;
       let fetched;
@@ -210,7 +213,7 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
         if (startedAt === generation) {
           current = null; error = ""; suppression = null; bankWaiting = false; flowProgress = null;
         }
-        return;
+        return { fetched: false, current: startedAt === generation };
       }
       // An ENVELOPE — { adminInput, suppression } — destructured explicitly rather than sniffed, so a
       // fetcher returning the wrong shape reads as "nothing pending" loudly rather than silently.
@@ -221,13 +224,17 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
       // world that the arrival of a request to sign does not change.
       const waiting = why === BANK_APPROVAL_SUPPRESSION;
       const progress = ownProgress(fetched?.flowProgress);
+      const seen = () => ({
+        fetched: true, current: startedAt === generation, hasRequest: Boolean(input), suppression: why,
+        flowProgress: progress
+      });
       if (!input) {
         // A suppression is only meaningful as the NEWEST answer, so it is written under the same
         // generation guard as everything else.
         if (startedAt === generation) {
           current = null; error = ""; suppression = why; bankWaiting = waiting; flowProgress = progress;
         }
-        return;
+        return seen();
       }
 
       // OWN IT FIRST. Everything after this point — validation, display, signing — uses this copy,
@@ -244,19 +251,19 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
           bankWaiting = waiting;
           flowProgress = progress;
         }
-        return;
+        return seen();
       }
 
       try {
         const { visibleAdminAction, signingString } = await validateAdminInput(owned);
-        if (startedAt !== generation) return;
+        if (startedAt !== generation) return seen();
         current = deepFreeze({ input: owned, action: visibleAdminAction, identity: identityFor(signingString, owned) });
         error = "";
         suppression = null;
         bankWaiting = waiting;
         flowProgress = progress;
       } catch (validationError) {
-        if (startedAt !== generation) return;
+        if (startedAt !== generation) return seen();
         // Keep it visible with its reason: silently hiding an underivable request leaves an operator
         // waiting on an approval that will never come, with no clue why.
         current = deepFreeze({ input: owned, action: null, identity: identityFor(null, owned) });
@@ -265,6 +272,7 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
         bankWaiting = waiting;
         flowProgress = progress;
       }
+      return seen();
     },
 
     snapshot() {
@@ -331,7 +339,7 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
      * live application state after an await, or a request fetched from one backend could be
      * submitted to another after the origin changed mid-signature.
      */
-    async approve({ sign, submit, context }) {
+    async approve({ sign, submit, context, isCurrent = () => true }) {
       const approved = current;
       if (!approved?.action) return { ok: false, reason: "not_approvable" };
       // A dismissed request is not "currently displayed"; visibility and approvability must agree,
@@ -341,11 +349,14 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
 
       approving = true;
       const startedAt = epoch;
+      // `isCurrent` is the CALLER's half of the same question: a background pass that has been
+      // superseded must stop exactly where a lock would stop it.
+      const isStillValid = () => startedAt === epoch && isCurrent();
       try {
         const signed = await sign(approved.input, approved.action, context);
         // Lock, reset or a backend change during signing invalidates the context this share was
         // produced for. Refuse to submit rather than send it somewhere it was never meant for.
-        if (startedAt !== epoch) return { ok: false, reason: "context_changed" };
+        if (!isStillValid()) return { ok: false, reason: "context_changed" };
 
         // Checking only here is not enough: submit() itself does real work before the request
         // leaves — hashing, fetching a nonce, signing the backend-auth envelope — and an
@@ -353,7 +364,6 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
         // predicate to re-check at the last moment it controls. Once the request is actually on the
         // wire the outcome is uncertain by nature; the goal is to shrink that window, not pretend
         // it closes.
-        const isStillValid = () => startedAt === epoch;
         const result = await submit(approved.input, signed, { ...context, isStillValid });
         if (!isStillValid()) return { ok: false, reason: "context_changed" };
 
@@ -416,23 +426,26 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
      * honest: an unattended chain is bounded by the same enumerated set as a tapped one, so a
      * backend cannot use the absence of a gesture to walk a phone somewhere new.
      */
-    async approveChain({ sign, submit, context, accept, onStep, maxSteps = 6, deadlineMs = 5 * 60 * 1000 }) {
+    async approveChain({
+      sign, submit, context, accept, onStep, isCurrent = () => true, maxSteps = 6, deadlineMs = 5 * 60 * 1000
+    }) {
       if (typeof accept !== "function") {
         throw new TypeError("approveChain requires an accept predicate: an unbounded chain is not consent");
       }
       // Captured ONCE for the whole chain, not per step. A lock, reset or backend-origin change
       // partway through must abandon the remainder, not just the step in flight.
       const chainEpoch = epoch;
+      const valid = () => chainEpoch === epoch && isCurrent();
       const startedAtMs = Date.now();
       const steps = [];
       for (let index = 0; index < maxSteps; index += 1) {
-        if (chainEpoch !== epoch) return { ok: false, reason: "context_changed", steps };
+        if (!valid()) return { ok: false, reason: "context_changed", steps };
         // Drafts carry a signed originating date and the bank refuses a stale one, so a chain that
         // has been running longer than a date-box is worth must stop rather than sign into a refusal.
         if (Date.now() - startedAtMs > deadlineMs) return { ok: false, reason: "deadline", steps };
 
         await controller.refresh();
-        if (chainEpoch !== epoch) return { ok: false, reason: "context_changed", steps };
+        if (!valid()) return { ok: false, reason: "context_changed", steps };
 
         const snap = controller.snapshot();
         // Nothing left to sign. Either the sequence is complete or it is waiting on the human in the
@@ -446,7 +459,7 @@ export function createAdminRequestController({ fetchPendingAdminRequest, validat
         }
 
         onStep?.(snap.action, index);
-        const outcome = await controller.approve({ sign, submit, context });
+        const outcome = await controller.approve({ sign, submit, context, isCurrent });
         if (!outcome.ok) return { ...outcome, steps };
         steps.push(snap.action);
       }

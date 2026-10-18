@@ -65,7 +65,10 @@ const state = {
   unresolvedApproval: null,
   // The shell's rejection modal is open or its POST is in flight (sent in "state"). Approving is off
   // meanwhile, as rejecting is while an approval runs: the two must never race over one bundle.
-  rejectionActive: false
+  rejectionActive: false,
+  // The shell is renewing the bank access this phone can renew (sent in "state"). Approve waits for it:
+  // an approval sent against an expired token is held by the service until somebody next opens the app.
+  bankAccessRenewing: false
 };
 // Validating a bundle is async, so an older "state" can finish after a newer one; only the latest may set
 // the bundle, or a bundle the shell has just removed (rejected) could come back.
@@ -298,9 +301,13 @@ function setButtonState() {
     els.approveButton.style.removeProperty("--approval-progress");
     els.approveButton.title = "";
   }
-  els.approveButton.disabled = state.busy || state.rejectionActive || approved || currentBundleUnresolved() || !state.phoneSharePackage || !state.webauthnCredential || !state.backendOrigin || !state.bundle;
+  els.approveButton.disabled = state.busy || state.rejectionActive || state.bankAccessRenewing || approved || currentBundleUnresolved() || !state.phoneSharePackage || !state.webauthnCredential || !state.backendOrigin || !state.bundle;
   els.rejectButton.disabled = !canRequestRejection();
   els.approveButton.textContent = approved ? "Approved" : showProgress ? approvalProgressText(state.approvalProgress, { multiline: true }) : "Approve";
+  // Say why Approve is off, on the button itself, for the few seconds it is.
+  if (!approved && !showProgress && state.bankAccessRenewing && state.bundle) {
+    els.approveButton.textContent = "Renewing bank access…";
+  }
 }
 
 // Rejection needs no WebAuthn credential (it cannot move money), only the share to sign the request. Not
@@ -429,6 +436,7 @@ async function applyState(message) {
   state.lastApprovalResult = Object.hasOwn(message, "lastApprovalResult") ? message.lastApprovalResult : state.lastApprovalResult;
   state.approvedBundleIds = new Set(message.approvedBundleIds ?? []);
   state.rejectionActive = Boolean(message.rejectionActive);
+  state.bankAccessRenewing = message.bankAccessState === "renewing";
   if (locking && state.sentAt) {
     setStatus(approvalLockedStatus(), "warning");
   }
@@ -663,7 +671,7 @@ async function settleApproval(record) {
 }
 
 async function approveBundle() {
-  if (state.rejectionActive || !state.phoneSharePackage || !state.webauthnCredential || !state.backendOrigin || !state.bundle || currentBundleApproved() || currentBundleUnresolved()) {
+  if (state.rejectionActive || state.bankAccessRenewing || !state.phoneSharePackage || !state.webauthnCredential || !state.backendOrigin || !state.bundle || currentBundleApproved() || currentBundleUnresolved()) {
     return;
   }
 
