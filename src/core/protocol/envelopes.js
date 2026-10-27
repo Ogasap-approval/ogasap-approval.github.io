@@ -13,6 +13,12 @@ const CURRENCY = /^[A-Z]{3}$/u;
 const AMOUNT_MINOR = /^[0-9]+$/u;
 const AMOUNT_DECIMAL = /^(0|[1-9][0-9]*)(\.[0-9]{1,2})?$/u;
 const BBAN_VALUE = /^[0-9]{14}$/u;
+// A Swedish BBAN is the clearing number followed by a 7..10 digit account. The clearing number is
+// four digits, except Swedbank's 8000 series, which Nordea takes with its fifth (check) digit
+// ("Corporate Access Payables - Appendix Sweden": "The clearing code must be 5 digits and consequently
+// the maximum length is 15 digits"). So a BBAN starting with 8 has a five-digit clearing number.
+const SE_BBAN_VALUE = /^(?:8[0-9]{4}|[0-79][0-9]{3})[0-9]{7,10}$/u;
+const seClearingLength = (bban) => (bban.startsWith("8") ? 5 : 4);
 const DISPLAY_UNSAFE = /[\p{Cc}\p{Cf}\p{Cs}\p{Noncharacter_Code_Point}]/u;
 // Nordea's InstantCreditorAddressDk rules, confirmed against the sandbox: an uppercase ISO 3166 alpha-2
 // country and a 1..35 character town from a fixed character set. Both anchored over the WHOLE string
@@ -699,22 +705,46 @@ function assertOptionalDisplaySafeText(name, object, key, maxLength) {
   }
 }
 
-function assertModeledBbanAccount(name, account, optionalKeys) {
-  assertModeledObject(name, account, ["type", "value"], optionalKeys);
+function assertModeledBbanAccount(name, account, { required = [], optional = [], pattern }) {
+  assertModeledObject(name, account, ["type", "value", ...required], optional);
   // `type` selects the account-numbering rail and is bank-honored; an unmodeled rail could route
   // the same digit string to a different recipient, so pin it to the only sandbox-confirmed value.
   if (account.type !== "BBAN") {
     throw new RangeError(`${name}.type must be "BBAN"`);
   }
-  assertPattern(`${name}.value`, account.value, BBAN_VALUE);
+  assertPattern(`${name}.value`, account.value, pattern);
 }
 
-// Pinned Nordea Corporate Payout v2 request body schema — the sandbox-confirmed DK shape produced
-// by the demo fixtures. This is an allow-list: every modeled key is validated and ANY unmodeled key,
-// at any nesting level, is rejected (fail closed). A WYSIWYS signer must provably model 100% of
-// bank-honored content, so the production system must extend this allow-list to every field the real
-// Nordea request sends — reflecting any recipient/amount-determining field in the visible payment and
-// rejecting anything it does not model.
+// The Corporate Payout v2 templates this signer models, one closed profile each. A body is checked
+// against exactly the profile its template_id names, so a field one template allows is still refused
+// in the other.
+const BANK_BODY_PROFILES = Object.freeze({
+  // The sandbox-confirmed DK shape produced by the demo fixtures.
+  INSTANT_CREDIT_TRANSFER_DK: Object.freeze({
+    currency: "DKK",
+    bban: BBAN_VALUE,
+    optionalBodyKeys: Object.freeze(["end_to_end_id", "external_id"]),
+    debtorAccountCurrency: "optional",
+    optionalCreditorKeys: Object.freeze(["address_details", "bank", "message"])
+  }),
+  // A standard (not instant) Swedish transfer, confirmed against the sandbox on 2026-10-26
+  // (nofipa-payments docs/sek-payouts-plan.md §3.1). Nordea refuses end_to_end_id here and requires
+  // the debtor account currency. Neither creditor.bank nor an address was probed, so both are refused.
+  DOMESTIC_CREDIT_TRANSFER_SE: Object.freeze({
+    currency: "SEK",
+    bban: SE_BBAN_VALUE,
+    optionalBodyKeys: Object.freeze(["external_id"]),
+    debtorAccountCurrency: "required",
+    optionalCreditorKeys: Object.freeze(["message"])
+  })
+});
+const BANK_BODY_REQUIRED_KEYS = Object.freeze(["template_id", "amount", "currency", "debtor", "creditor"]);
+
+// Pinned Nordea Corporate Payout v2 request body schema, per template (BANK_BODY_PROFILES). This is an
+// allow-list: every modeled key is validated and ANY unmodeled key, at any nesting level, is rejected
+// (fail closed). A WYSIWYS signer must provably model 100% of bank-honored content, so the production
+// system must extend this allow-list to every field the real Nordea request sends — reflecting any
+// recipient/amount-determining field in the visible payment and rejecting anything it does not model.
 function parseBankBodyV1(bodyBytes) {
   let body;
   try {
@@ -728,39 +758,42 @@ function parseBankBodyV1(bodyBytes) {
 
   // end_to_end_id / external_id are execution-neutral references (passed through to statements and
   // used for backend idempotency/matching); neither determines recipient or amount, so they are
-  // allow-listed but not displayed.
-  assertModeledObject(
-    "bank body",
-    body,
-    ["template_id", "amount", "currency", "debtor", "creditor"],
-    ["end_to_end_id", "external_id"]
-  );
-  if (body.template_id !== "INSTANT_CREDIT_TRANSFER_DK") {
-    throw new RangeError("template_id must be \"INSTANT_CREDIT_TRANSFER_DK\"");
+  // allow-listed but not displayed. The first check is against every key any profile allows, so a
+  // body is an object with known keys before its template_id picks the profile.
+  assertModeledObject("bank body", body, BANK_BODY_REQUIRED_KEYS, ["end_to_end_id", "external_id"]);
+  if (typeof body.template_id !== "string" || !hasOwn(BANK_BODY_PROFILES, body.template_id)) {
+    const names = Object.keys(BANK_BODY_PROFILES).map((name) => `"${name}"`).join(" or ");
+    throw new RangeError(`template_id must be ${names}`);
   }
+  const profile = BANK_BODY_PROFILES[body.template_id];
+  assertModeledObject("bank body", body, BANK_BODY_REQUIRED_KEYS, profile.optionalBodyKeys);
   assertPattern("amount", body.amount, AMOUNT_DECIMAL);
-  if (body.currency !== "DKK") {
-    throw new RangeError("currency must be \"DKK\"");
+  if (body.currency !== profile.currency) {
+    throw new RangeError(`currency must be "${profile.currency}"`);
   }
   assertOptionalDisplaySafeText("bank body", body, "end_to_end_id", MAX_BANK_BODY_FIELD);
   assertOptionalDisplaySafeText("bank body", body, "external_id", MAX_BANK_BODY_FIELD);
 
   // own_reference is the debtor's own statement text; debtor.account.currency is the funding-account
-  // currency (equal to the payment currency in the confirmed DK scope) — both execution-neutral here.
+  // currency (equal to the payment currency in every modeled template) — both execution-neutral here.
   assertModeledObject("debtor", body.debtor, ["account"], ["own_reference"]);
   assertOptionalDisplaySafeText("debtor", body.debtor, "own_reference", MAX_BANK_BODY_FIELD);
-  assertModeledBbanAccount("debtor.account", body.debtor.account, ["currency"]);
-  if (hasOwn(body.debtor.account, "currency") && body.debtor.account.currency !== "DKK") {
-    throw new RangeError("debtor.account.currency must be \"DKK\"");
+  assertModeledBbanAccount("debtor.account", body.debtor.account, {
+    required: profile.debtorAccountCurrency === "required" ? ["currency"] : [],
+    optional: profile.debtorAccountCurrency === "required" ? [] : ["currency"],
+    pattern: profile.bban
+  });
+  if (hasOwn(body.debtor.account, "currency") && body.debtor.account.currency !== profile.currency) {
+    throw new RangeError(`debtor.account.currency must be "${profile.currency}"`);
   }
 
-  assertModeledObject("creditor", body.creditor, ["name", "account"], ["address_details", "bank", "message"]);
+  assertModeledObject("creditor", body.creditor, ["name", "account"], profile.optionalCreditorKeys);
   assertDisplaySafeText("creditor.name", body.creditor.name, 140);
   if (body.creditor.name.length < 1) {
     throw new RangeError("creditor.name is required");
   }
   assertOptionalDisplaySafeText("creditor", body.creditor, "message", 140);
-  assertModeledBbanAccount("creditor.account", body.creditor.account, []);
+  assertModeledBbanAccount("creditor.account", body.creditor.account, { pattern: profile.bban });
   if (hasOwn(body.creditor, "bank")) {
     // bank.bank_code is bound to the signed BBAN (validated against the registration prefix in
     // domesticAccountDisplay); bank.country is a display hint.
@@ -787,9 +820,16 @@ function parseBankBodyV1(bodyBytes) {
 }
 
 function domesticAccountDisplay(account, bank, body) {
-  // `account` is already validated as a BBAN with a 14-digit value by parseBankBodyV1.
+  // `account` is already validated by parseBankBodyV1 against its template's BBAN pattern.
   const value = account.value;
   const templateId = body.template_id;
+  if (templateId === "DOMESTIC_CREDIT_TRANSFER_SE") {
+    // Clearing number and account, the way Swedish banks write them (all five clearing digits for
+    // Swedbank's 8000 series). The SE profile allows no creditor.bank, so there is no bank code to
+    // cross-check.
+    const clearingLength = seClearingLength(value);
+    return `${value.slice(0, clearingLength)}-${value.slice(clearingLength)}`;
+  }
   if (bank?.country === "DK" || bank?.bank_code || templateId.endsWith("_DK") || body.currency === "DKK") {
     const regCode = value.slice(0, 4);
     if (typeof bank?.bank_code === "string" && bank.bank_code && bank.bank_code !== regCode) {
