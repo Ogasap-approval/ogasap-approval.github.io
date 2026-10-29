@@ -515,10 +515,10 @@ export function normalizeVisiblePaymentV1(payment) {
     throw new RangeError("visible_payment is required");
   }
 
+  // "" only when the signed body carries no creditor name, which one SDV form does
+  // (docs/protocol.md). A supplied visible payment is always compared with the one derived from the
+  // body, and a profile that requires a name derives a non-empty one, so "" can never stand in for one.
   assertNoLineBreaks("creditor_name", payment.creditor_name, 140);
-  if (payment.creditor_name.length < 1) {
-    throw new RangeError("creditor_name is required");
-  }
   assertNoLineBreaks("creditor_account", payment.creditor_account, 64);
   if (payment.creditor_account.length < 4) {
     throw new RangeError("creditor_account must be at least 4 characters");
@@ -813,7 +813,10 @@ export function seBicForBban(bban) {
 // The Corporate Payout v2 templates this signer models, one closed profile each. A body is checked
 // against exactly the profile its template_id names, so a field one template allows is still refused
 // in the other.
-//   - requiredCreditorKeys / optionalCreditorKeys: the creditor's keys beyond name and account.
+//   - creditorNameForms: how the creditor name may be sent. "name" is creditor.name; "name_details" is
+//     creditor.name_details.line1, the field Nordea's v2.27 replaced with creditor.name; "none" sends
+//     no name.
+//   - requiredCreditorKeys / optionalCreditorKeys: the creditor's keys beyond the name and account.
 //   - creditorBank: how creditor.bank is checked when present: "dk" (country and a bank_code bound to
 //     the registration number) or "se_bic" (a BIC bound to the clearing number).
 //   - accountDisplay: "clearing-account" displays the creditor account the Swedish way; otherwise the
@@ -825,6 +828,7 @@ const BANK_BODY_PROFILES = Object.freeze({
     bban: BBAN_VALUE,
     optionalBodyKeys: Object.freeze(["end_to_end_id", "external_id"]),
     debtorAccountCurrency: "optional",
+    creditorNameForms: Object.freeze(["name"]),
     requiredCreditorKeys: Object.freeze([]),
     optionalCreditorKeys: Object.freeze(["address_details", "bank", "message"]),
     creditorBank: "dk"
@@ -837,6 +841,7 @@ const BANK_BODY_PROFILES = Object.freeze({
     bban: SE_BBAN_VALUE,
     optionalBodyKeys: Object.freeze(["external_id"]),
     debtorAccountCurrency: "required",
+    creditorNameForms: Object.freeze(["name"]),
     requiredCreditorKeys: Object.freeze([]),
     optionalCreditorKeys: Object.freeze(["message"]),
     accountDisplay: "clearing-account"
@@ -845,11 +850,14 @@ const BANK_BODY_PROFILES = Object.freeze({
   // docs/sek-sdv-plan.md). The SE transfer above plus creditor.bank, which the sandbox requires, holding
   // the BIC only: it refuses bank.country and end_to_end_id. The BIC must be the one BSAB lists for the
   // creditor account's clearing number, so it can never route the money elsewhere than the account shown.
+  // The name: the sandbox requires creditor.name and production refused it (2026-10-29), so the old
+  // name_details form and no name are modeled too, for the SDV test (docs/sek-sdv-plan.md §9.5).
   SDV_DOMESTIC_PAYMENT_SE: Object.freeze({
     currency: "SEK",
     bban: SE_BBAN_VALUE,
     optionalBodyKeys: Object.freeze(["external_id"]),
     debtorAccountCurrency: "required",
+    creditorNameForms: Object.freeze(["name", "name_details", "none"]),
     requiredCreditorKeys: Object.freeze(["bank"]),
     optionalCreditorKeys: Object.freeze(["message"]),
     creditorBank: "se_bic",
@@ -857,6 +865,45 @@ const BANK_BODY_PROFILES = Object.freeze({
   })
 });
 const BANK_BODY_REQUIRED_KEYS = Object.freeze(["template_id", "amount", "currency", "debtor", "creditor"]);
+
+// At most one name form is present, and one the profile takes; none at all only where it takes "none".
+// name_details is modeled as { line1 } only. 35 is deliberately short: the docs give only the newer
+// creditor.name's 140, not the old line length. A longer name is refused, never cut.
+function assertCreditorName(creditor, forms) {
+  const present = ["name", "name_details"].filter((key) => hasOwn(creditor, key));
+  if (present.length > 1) {
+    throw new RangeError("creditor must not carry both name and name_details");
+  }
+  if (present.length === 0) {
+    if (!forms.includes("none")) {
+      throw new RangeError("creditor.name is required");
+    }
+    return;
+  }
+  if (present[0] === "name") {
+    assertDisplaySafeText("creditor.name", creditor.name, 140);
+    if (creditor.name.length < 1) {
+      throw new RangeError("creditor.name is required");
+    }
+    return;
+  }
+  assertModeledObject("creditor.name_details", creditor.name_details, ["line1"], []);
+  assertDisplaySafeText("creditor.name_details.line1", creditor.name_details.line1, 35);
+  if (creditor.name_details.line1.length < 1) {
+    throw new RangeError("creditor.name_details.line1 is required");
+  }
+}
+
+// The name the bank receives, in whichever form assertCreditorName accepted; "" when none is sent.
+function creditorNameOf(creditor) {
+  if (hasOwn(creditor, "name")) {
+    return creditor.name;
+  }
+  if (hasOwn(creditor, "name_details")) {
+    return creditor.name_details.line1;
+  }
+  return "";
+}
 
 // Pinned Nordea Corporate Payout v2 request body schema, per template (BANK_BODY_PROFILES). This is an
 // allow-list: every modeled key is validated and ANY unmodeled key, at any nesting level, is rejected
@@ -905,12 +952,14 @@ function parseBankBodyV1(bodyBytes) {
     throw new RangeError(`debtor.account.currency must be "${profile.currency}"`);
   }
 
-  assertModeledObject("creditor", body.creditor, ["name", "account", ...profile.requiredCreditorKeys],
-    profile.optionalCreditorKeys);
-  assertDisplaySafeText("creditor.name", body.creditor.name, 140);
-  if (body.creditor.name.length < 1) {
-    throw new RangeError("creditor.name is required");
-  }
+  // A profile with only creditor.name keeps it a required key, so DK and the SE transfer refuse exactly
+  // as before. Otherwise each name key is optional here and assertCreditorName decides.
+  const nameKeys = profile.creditorNameForms.filter((form) => form !== "none");
+  const nameRequired = nameKeys.length === 1 && !profile.creditorNameForms.includes("none");
+  assertModeledObject("creditor", body.creditor,
+    [...(nameRequired ? nameKeys : []), "account", ...profile.requiredCreditorKeys],
+    [...(nameRequired ? [] : nameKeys), ...profile.optionalCreditorKeys]);
+  assertCreditorName(body.creditor, profile.creditorNameForms);
   assertOptionalDisplaySafeText("creditor", body.creditor, "message", 140);
   assertModeledBbanAccount("creditor.account", body.creditor.account, { pattern: profile.bban });
   if (profile.creditorBank === "dk" && hasOwn(body.creditor, "bank")) {
@@ -988,7 +1037,7 @@ export function deriveVisiblePaymentFromBankBodyV1(bodyBytes) {
   }
 
   return normalizeVisiblePaymentV1({
-    creditor_name: body.creditor.name,
+    creditor_name: creditorNameOf(body.creditor),
     creditor_account: domesticAccountDisplay(body.creditor.account, body.creditor.bank, body),
     debtor_account_masked: maskAccount(body.debtor.account.value),
     amount_minor: amountMinor,
