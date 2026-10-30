@@ -715,99 +715,115 @@ function assertModeledBbanAccount(name, account, { required = [], optional = [],
   assertPattern(`${name}.value`, account.value, pattern);
 }
 
-// Swedish clearing number -> BIC, for SDV_DOMESTIC_PAYMENT_SE's creditor.bank.bic. Bankinfrastruktur i
-// Sverige AB's (BSAB, which administers Swedish clearing numbers) "IBAN och svenskt nationellt
-// kontonummer", page updated 2026-08-06, one row per row of its downloadable CSV, in its order, with its
-// bank names. As BSAB lists them, except:
+// Swedish clearing number -> BIC and bank code, for creditor.bank in DOMESTIC_CREDIT_TRANSFER_SE and
+// SDV_DOMESTIC_PAYMENT_SE. Bankinfrastruktur i Sverige AB's (BSAB, which administers Swedish clearing
+// numbers) "IBAN och svenskt nationellt kontonummer", page updated 2026-08-06, one row per row of its
+// downloadable CSV, in its order, with its bank names. Each row is [from, to, BIC, IBAN ID]. The IBAN ID is
+// the three-digit bank identifier at IBAN positions 5-7. It is taken to be what the Corporate Payout API
+// reference calls bank_code, the "bankidentifieringskod" ("not the clearing code"): an assumption, from the
+// reference's example pairing "120" with DABASESX, as this table does. Nordea publishes no mapping. As BSAB
+// lists them, except:
 //   - Lunar's BIC is trimmed (the CSV has a trailing no-break space);
 //   - Banking Circle's keeps the 11 characters BSAB gives;
 //   - Swedbank 9300-9349 is left out: BSAB marks it "Serien upphörde den 9 mars 2026" (the series ended).
 // null is a range BSAB lists without a BIC. Ranges never overlap, so the first match is the only match.
-// A bank added after 2026-08-06 has no BIC here, so it cannot be paid same-day-value until a row is added.
-const SE_CLEARING_BICS = Object.freeze([
-  [1100, 1199, "NDEASESS"], // Nordea
-  [1200, 1399, "DABASESX"], // Danske Bank
-  [1400, 2099, "NDEASESS"], // Nordea
-  [2110, 2119, "JUNTSEGG"], // Juni Technology AB
-  [2120, 2126, "SVVVSESS"], // Steven AB
-  [2127, 2127, "SVVVSES2"], // Steven AB
-  [2128, 2128, "SVVVSES3"], // Steven AB
-  [2129, 2129, "SVVVSES4"], // Steven AB
-  [2130, 2139, "ZIMPSES2"], // Zimpler AB
-  [2140, 2149, "TRLYSESS"], // Trustly Group AB
-  [2150, 2159, "REVOSESS"], // Revolut Bank UAB
-  [2160, 2169, null], // Trade Republic Bank
-  [2170, 2179, "PPPVLUL2"], // PPRO Payment Services SA
-  [2180, 2189, "STTOIE22"], // Stripe
-  [2300, 2399, "AABASESS"], // Ålandsbanken
-  [2400, 2499, "DABASESX"], // Danske Bank
-  [3000, 3299, "NDEASESS"], // Nordea
-  [3300, 3300, "NDEASESS"], // Nordea (personkonto)
-  [3301, 3399, "NDEASESS"], // Nordea
-  [3400, 3409, "ELLFSESS"], // Länsförsäkringar Bank
-  [3410, 3781, "NDEASESS"], // Nordea
-  [3782, 3782, "NDEASESS"], // Nordea (personkonto)
-  [3783, 3999, "NDEASESS"], // Nordea
-  [4000, 4999, "NDEASESS"], // Nordea
-  [5000, 5999, "ESSESESS"], // SEB
-  [6000, 6999, "HANDSESS"], // Handelsbanken
-  [7000, 7999, "SWEDSESS"], // Swedbank
-  [8000, 8999, "SWEDSESS"], // Swedbank
-  [9020, 9029, "ELLFSESS"], // Länsförsäkringar Bank
-  [9040, 9049, "CITISESX"], // Citibank Europe plc (Sweden Branch)
-  [9060, 9069, "ELLFSESS"], // Länsförsäkringar Bank
-  [9070, 9079, "FEMAMTMT"], // Multitude Bank plc.
-  [9100, 9109, "NNSESE22"], // Nordnet Bank
-  [9120, 9124, "ESSESESS"], // SEB
-  [9130, 9149, "ESSESESS"], // SEB
-  [9150, 9169, "SKIASESS"], // Skandiabanken
-  [9170, 9179, "IKANSE21"], // Ikanobanken
-  [9180, 9189, "DABASESX"], // Danske Bank
-  [9190, 9199, "DNBASESX"], // DNB Bank ASA, filial Sverige
-  [9230, 9239, "MARGSESS"], // Marginalen Bank
-  [9250, 9259, "SBAVSESS"], // SBAB Bank
-  [9270, 9279, "IBCASES1"], // ICA Banken
-  [9280, 9289, "RESUSE2H"], // Resurs Bank AB
-  [9390, 9399, "LAHYSESS"], // Landshypotek
-  [9400, 9449, "FORXSES1"], // Forex Bank
-  [9460, 9469, "BSNOSESS"], // Santander Consumer Bank
-  [9470, 9479, "FTSBSESS"], // BNP Paribas
-  [9500, 9549, "NDEASESS"], // Nordea (Plusgirot)
-  [9550, 9564, "AVANSESX"], // Avanza Bank
-  [9565, 9569, "AVANSESX"], // Avanza Bank
-  [9570, 9579, "SPSDSE23"], // Sparbanken Syd
-  [9580, 9589, null], // Aion Bank
-  [9590, 9599, "ERPFSES2"], // EP Bank
-  [9600, 9609, "BCIRSE22XXX"], // Banking Circle
-  [9630, 9639, "LOSADKKK"], // Lån & Spar Bank A/S, filial
-  [9640, 9649, "NOFBSESS"], // NOBA Bank Group
-  [9650, 9659, "MEMMSE21"], // MedMera Bank AB
-  [9660, 9669, "SVEASESS"], // Svea Bank
-  [9670, 9679, "JAKMSE22"], // JAK Medlemsbank
-  [9680, 9689, "BSTPSESS"], // Enity Bank Group
-  [9700, 9709, "EKMLSE2S"], // Ekobanken
-  [9710, 9719, "LUNADK2B"], // Lunar Bank
-  [9750, 9759, "NOHLSESS"], // Northmill AB
-  [9780, 9789, "KLRNSESS"], // Klarna Bank
-  [9960, 9969, "NDEASESS"] // Nordea (Plusgirot)
+// A bank added after 2026-08-06 is in no row, so it cannot be paid at all until a row is added.
+const SE_CLEARING_BANKS = Object.freeze([
+  [1100, 1199, "NDEASESS", "300"], // Nordea
+  [1200, 1399, "DABASESX", "120"], // Danske Bank
+  [1400, 2099, "NDEASESS", "300"], // Nordea
+  [2110, 2119, "JUNTSEGG", "211"], // Juni Technology AB
+  [2120, 2126, "SVVVSESS", "212"], // Steven AB
+  [2127, 2127, "SVVVSES2", "212"], // Steven AB
+  [2128, 2128, "SVVVSES3", "212"], // Steven AB
+  [2129, 2129, "SVVVSES4", "212"], // Steven AB
+  [2130, 2139, "ZIMPSES2", "213"], // Zimpler AB
+  [2140, 2149, "TRLYSESS", "214"], // Trustly Group AB
+  [2150, 2159, "REVOSESS", "215"], // Revolut Bank UAB
+  [2160, 2169, null, "216"], // Trade Republic Bank
+  [2170, 2179, "PPPVLUL2", "217"], // PPRO Payment Services SA
+  [2180, 2189, "STTOIE22", "218"], // Stripe
+  [2300, 2399, "AABASESS", "230"], // Ålandsbanken
+  [2400, 2499, "DABASESX", "120"], // Danske Bank
+  [3000, 3299, "NDEASESS", "300"], // Nordea
+  [3300, 3300, "NDEASESS", "300"], // Nordea (personkonto)
+  [3301, 3399, "NDEASESS", "300"], // Nordea
+  [3400, 3409, "ELLFSESS", "902"], // Länsförsäkringar Bank
+  [3410, 3781, "NDEASESS", "300"], // Nordea
+  [3782, 3782, "NDEASESS", "300"], // Nordea (personkonto)
+  [3783, 3999, "NDEASESS", "300"], // Nordea
+  [4000, 4999, "NDEASESS", "300"], // Nordea
+  [5000, 5999, "ESSESESS", "500"], // SEB
+  [6000, 6999, "HANDSESS", "600"], // Handelsbanken
+  [7000, 7999, "SWEDSESS", "800"], // Swedbank
+  [8000, 8999, "SWEDSESS", "800"], // Swedbank
+  [9020, 9029, "ELLFSESS", "902"], // Länsförsäkringar Bank
+  [9040, 9049, "CITISESX", "904"], // Citibank Europe plc (Sweden Branch)
+  [9060, 9069, "ELLFSESS", "902"], // Länsförsäkringar Bank
+  [9070, 9079, "FEMAMTMT", "907"], // Multitude Bank plc.
+  [9100, 9109, "NNSESE22", "910"], // Nordnet Bank
+  [9120, 9124, "ESSESESS", "500"], // SEB
+  [9130, 9149, "ESSESESS", "500"], // SEB
+  [9150, 9169, "SKIASESS", "915"], // Skandiabanken
+  [9170, 9179, "IKANSE21", "917"], // Ikanobanken
+  [9180, 9189, "DABASESX", "918"], // Danske Bank
+  [9190, 9199, "DNBASESX", "919"], // DNB Bank ASA, filial Sverige
+  [9230, 9239, "MARGSESS", "923"], // Marginalen Bank
+  [9250, 9259, "SBAVSESS", "925"], // SBAB Bank
+  [9270, 9279, "IBCASES1", "927"], // ICA Banken
+  [9280, 9289, "RESUSE2H", "928"], // Resurs Bank AB
+  [9390, 9399, "LAHYSESS", "939"], // Landshypotek
+  [9400, 9449, "FORXSES1", "940"], // Forex Bank
+  [9460, 9469, "BSNOSESS", "946"], // Santander Consumer Bank
+  [9470, 9479, "FTSBSESS", "947"], // BNP Paribas
+  [9500, 9549, "NDEASESS", "950"], // Nordea (Plusgirot)
+  [9550, 9564, "AVANSESX", "955"], // Avanza Bank
+  [9565, 9569, "AVANSESX", "955"], // Avanza Bank
+  [9570, 9579, "SPSDSE23", "957"], // Sparbanken Syd
+  [9580, 9589, null, "958"], // Aion Bank
+  [9590, 9599, "ERPFSES2", "959"], // EP Bank
+  [9600, 9609, "BCIRSE22XXX", "960"], // Banking Circle
+  [9630, 9639, "LOSADKKK", "963"], // Lån & Spar Bank A/S, filial
+  [9640, 9649, "NOFBSESS", "964"], // NOBA Bank Group
+  [9650, 9659, "MEMMSE21", "965"], // MedMera Bank AB
+  [9660, 9669, "SVEASESS", "966"], // Svea Bank
+  [9670, 9679, "JAKMSE22", "967"], // JAK Medlemsbank
+  [9680, 9689, "BSTPSESS", "968"], // Enity Bank Group
+  [9700, 9709, "EKMLSE2S", "970"], // Ekobanken
+  [9710, 9719, "LUNADK2B", "971"], // Lunar Bank
+  [9750, 9759, "NOHLSESS", "975"], // Northmill AB
+  [9780, 9789, "KLRNSESS", "978"], // Klarna Bank
+  [9960, 9969, "NDEASESS", "950"] // Nordea (Plusgirot)
 ].map((row) => Object.freeze(row)));
 // BSAB gives this BIC to every range Nordea holds, personkonto and Plusgirot included.
 const NORDEA_SE_BIC = "NDEASESS";
 
-// The BIC BSAB lists for a Swedish BBAN's clearing number: its first four digits, which for Swedbank's
-// 8000 series leave out the fifth (check) digit. null when the value is not a Swedish BBAN, its clearing
-// number is in no listed range, or BSAB lists the range without a BIC.
-export function seBicForBban(bban) {
+// The table row for a Swedish BBAN's clearing number: its first four digits, which for Swedbank's 8000
+// series leave out the fifth (check) digit. null when the value is not a Swedish BBAN or its clearing
+// number is in no listed range.
+function seClearingRow(bban) {
   if (typeof bban !== "string" || !SE_BBAN_VALUE.test(bban)) {
     return null;
   }
   const clearing = Number(bban.slice(0, 4));
-  for (const [from, to, bic] of SE_CLEARING_BICS) {
-    if (clearing >= from && clearing <= to) {
-      return bic;
-    }
+  return SE_CLEARING_BANKS.find(([from, to]) => clearing >= from && clearing <= to) ?? null;
+}
+
+// The BIC BSAB lists for a Swedish BBAN's clearing number. null when the value is not a Swedish BBAN, its
+// clearing number is in no listed range, or BSAB lists the range without a BIC.
+export function seBicForBban(bban) {
+  return seClearingRow(bban)?.[2] ?? null;
+}
+
+// The creditor.bank a Swedish BBAN's clearing number calls for, { bank_code, bic }, in that key order.
+// null exactly where seBicForBban is null: a bank without a BIC cannot be named to Nordea. Nordea's own
+// ranges return NDEASESS here; the SE transfer sends no bank for them (see the profile below).
+export function seBankForBban(bban) {
+  const row = seClearingRow(bban);
+  if (row === null || row[2] === null) {
+    return null;
   }
-  return null;
+  return Object.freeze({ bank_code: row[3], bic: row[2] });
 }
 
 // The Corporate Payout v2 templates this signer models, one closed profile each. A body is checked
@@ -817,8 +833,10 @@ export function seBicForBban(bban) {
 //     creditor.name_details.line1, the field Nordea's v2.27 replaced with creditor.name; "none" sends
 //     no name.
 //   - requiredCreditorKeys / optionalCreditorKeys: the creditor's keys beyond the name and account.
-//   - creditorBank: how creditor.bank is checked when present: "dk" (country and a bank_code bound to
-//     the registration number) or "se_bic" (a BIC bound to the clearing number).
+//   - creditorBank: how creditor.bank is checked: "dk" (when present: country and a bank_code bound to
+//     the registration number), "se_bic" (a BIC bound to the clearing number) or "se_bank_unless_nordea"
+//     (absent for a Nordea account; otherwise a BIC, and optionally a bank_code, bound to the clearing
+//     number).
 //   - accountDisplay: "clearing-account" displays the creditor account the Swedish way; otherwise the
 //     DK rules in domesticAccountDisplay apply.
 const BANK_BODY_PROFILES = Object.freeze({
@@ -835,7 +853,13 @@ const BANK_BODY_PROFILES = Object.freeze({
   }),
   // A standard (not instant) Swedish transfer, confirmed against the sandbox on 2026-10-26
   // (nofipa-payments docs/sek-payouts-plan.md §3.1). Nordea refuses end_to_end_id here and requires
-  // the debtor account currency. Neither creditor.bank nor an address was probed, so both are refused.
+  // the debtor account currency. An address was not probed, so it is refused.
+  // creditor.bank follows the Corporate Payout API reference's DomesticCreditTransferSe model: bic and
+  // bank_code are "not required for Nordea internal transfers but mandatory for payments to other Swedish
+  // banks". Nordea's Corporate Payout API FAQ calls only the BIC mandatory: without it the payment is treated
+  // as Nordea-internal and another bank's account is refused as credit_account_invalid (as in production,
+  // 2026-10-29). So bic is required here and bank_code optional. The sandbox does not check this, which is
+  // why the bank-less body passed it.
   DOMESTIC_CREDIT_TRANSFER_SE: Object.freeze({
     currency: "SEK",
     bban: SE_BBAN_VALUE,
@@ -843,7 +867,8 @@ const BANK_BODY_PROFILES = Object.freeze({
     debtorAccountCurrency: "required",
     creditorNameForms: Object.freeze(["name"]),
     requiredCreditorKeys: Object.freeze([]),
-    optionalCreditorKeys: Object.freeze(["message"]),
+    optionalCreditorKeys: Object.freeze(["bank", "message"]),
+    creditorBank: "se_bank_unless_nordea",
     accountDisplay: "clearing-account"
   }),
   // A same-day-value Swedish transfer to another Swedish bank, never to Nordea (nofipa-payments
@@ -987,6 +1012,33 @@ function parseBankBodyV1(bodyBytes) {
       throw new RangeError("creditor.bank.bic does not match the creditor account's clearing number");
     }
   }
+  if (profile.creditorBank === "se_bank_unless_nordea") {
+    // Bank-honored routing that is not displayed, bound to the account that is, as for the SDV BIC. A
+    // Nordea account is sent without a bank, as before (proven in production for an ordinary Nordea account;
+    // personkonto and Plusgirot are not yet proven either way); any other bank's account must
+    // name exactly the BIC, and if it sends one the bank code, that the clearing table lists for it. An
+    // account the table cannot place cannot be paid. No message repeats the account.
+    const expected = seBankForBban(body.creditor.account.value);
+    if (expected === null) {
+      throw new RangeError("creditor.account has no BIC in the Swedish clearing table");
+    }
+    if (expected.bic === NORDEA_SE_BIC) {
+      if (hasOwn(body.creditor, "bank")) {
+        throw new RangeError("creditor.bank must be absent for an account held by Nordea");
+      }
+    } else {
+      if (!hasOwn(body.creditor, "bank")) {
+        throw new RangeError("creditor.bank is required for an account at another Swedish bank");
+      }
+      assertModeledObject("creditor.bank", body.creditor.bank, ["bic"], ["bank_code"]);
+      if (body.creditor.bank.bic !== expected.bic) {
+        throw new RangeError("creditor.bank.bic does not match the creditor account's clearing number");
+      }
+      if (hasOwn(body.creditor.bank, "bank_code") && body.creditor.bank.bank_code !== expected.bank_code) {
+        throw new RangeError("creditor.bank.bank_code does not match the creditor account's clearing number");
+      }
+    }
+  }
   if (hasOwn(body.creditor, "address_details")) {
     // Signed but NOT displayed: like end_to_end_id and debtor.own_reference it is bound to the approval
     // through the body hash only, and never enters the visible payment. It does not route the money.
@@ -1009,8 +1061,8 @@ function domesticAccountDisplay(account, bank, body) {
   const templateId = body.template_id;
   if (BANK_BODY_PROFILES[templateId].accountDisplay === "clearing-account") {
     // Clearing number and account, the way Swedish banks write them (all five clearing digits for
-    // Swedbank's 8000 series). No bank code to cross-check here: the SE transfer has no creditor.bank,
-    // and the SDV's BIC was bound to this account in parseBankBodyV1.
+    // Swedbank's 8000 series). No bank code to cross-check here: parseBankBodyV1 already bound both SE
+    // templates' creditor.bank to this account.
     const clearingLength = seClearingLength(value);
     return `${value.slice(0, clearingLength)}-${value.slice(clearingLength)}`;
   }

@@ -7,5 +7,5 @@
 // protocol revisions carry different ids and fail closed with an explicit
 // `protocol_release_rejected` rather than an opaque signature failure.
 export const PROTOCOL_VERSION = "0.5.0";
-export const PROTOCOL_CORE_DIGEST_SHA256 = "eef1b8cfd64528c86ad7f0b9e79cd78cceff21474796dfb568c17d251f76b9e2";
-export const PROTOCOL_RELEASE_ID = "0.5.0+core.eef1b8cfd64528c8";
+export const PROTOCOL_CORE_DIGEST_SHA256 = "1aa7078b662590e38c4f4bc8445fcfc8fcd7b44fa14b861c051f21687747d689";
+export const PROTOCOL_RELEASE_ID = "0.5.0+core.1aa7078b662590e3";
