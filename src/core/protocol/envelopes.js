@@ -826,6 +826,104 @@ export function seBankForBban(bban) {
   return Object.freeze({ bank_code: row[3], bic: row[2] });
 }
 
+// The countries a CROSS_BORDER_DK / CROSS_BORDER_SE payout may pay, with each one's IBAN length (SWIFT's
+// IBAN registry): the SEPA scheme's geographical scope as the EPC lists it. That is the EEA (the EU, Iceland,
+// Liechtenstein and Norway), Andorra, Gibraltar, Monaco, San Marino, Switzerland, the United Kingdom and
+// Vatican City, and the countries admitted in 2024-25: Albania, Moldova, Montenegro, North Macedonia and
+// Serbia. A country in no row cannot be paid, which keeps the templates to the SEPA area they are modeled
+// for: outside it Nordea asks for fields (purpose codes, intermediary banks) this signer does not model.
+const SEPA_IBAN_LENGTHS = Object.freeze({
+  AD: 24, AL: 28, AT: 20, BE: 16, BG: 22, CH: 21, CY: 28, CZ: 24, DE: 22, DK: 18, EE: 20, ES: 24,
+  FI: 18, FR: 27, GB: 22, GI: 23, GR: 27, HR: 21, HU: 28, IE: 22, IS: 26, IT: 27, LI: 21, LT: 20,
+  LU: 20, LV: 21, MC: 27, MD: 24, ME: 22, MK: 19, MT: 31, NL: 18, NO: 15, PL: 28, PT: 25, RO: 24,
+  RS: 22, SE: 24, SI: 19, SK: 24, SM: 27, VA: 22
+});
+// The SEPA territories that use another country's IBANs but have their own ISO country code, which a bank
+// there may carry in its BIC: the French overseas departments and Saint Barthelemy, Saint Martin and Saint
+// Pierre and Miquelon (FR), Jersey, Guernsey and the Isle of Man (GB), and Aland (FI). The CFP-franc
+// territories (New Caledonia, French Polynesia, Wallis and Futuna) use FR IBANs too but are outside SEPA, so
+// a BIC of theirs stays refused.
+const SEPA_IBAN_TERRITORIES = Object.freeze({
+  FI: Object.freeze(["AX"]),
+  FR: Object.freeze(["BL", "GF", "GP", "MF", "MQ", "PM", "RE", "YT"]),
+  GB: Object.freeze(["GG", "IM", "JE"])
+});
+// Upper case only: the electronic form of an IBAN, as Nordea echoes it.
+const IBAN_VALUE = /^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$/u;
+// ISO 9362: bank, country, location, and optionally a branch. Upper case only.
+const BIC_VALUE = /^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?$/u;
+
+// ISO 13616 / ISO 7064 MOD 97-10: the four leading characters moved to the end, letters as 10..35, the
+// number modulo 97 is 1. Computed digit by digit, so it never leaves the safe integer range.
+function ibanCheckDigitsValid(iban) {
+  let remainder = 0;
+  for (const char of iban.slice(4) + iban.slice(0, 4)) {
+    const code = char.charCodeAt(0);
+    for (const digit of code >= 65 ? String(code - 55) : char) {
+      remainder = (remainder * 10 + Number(digit)) % 97;
+    }
+  }
+  return remainder === 1;
+}
+
+// Why `value` is not an IBAN a cross-border profile can pay from some debtor account, as the end of an
+// error message, or null when it is one: the electronic form, a country in SEPA_IBAN_LENGTHS, that
+// country's length, valid check digits.
+function sepaIbanProblem(value) {
+  if (typeof value !== "string" || !IBAN_VALUE.test(value)) {
+    return "is invalid";
+  }
+  const country = value.slice(0, 2);
+  if (!hasOwn(SEPA_IBAN_LENGTHS, country)) {
+    return "must be the IBAN of an account in the SEPA area";
+  }
+  if (value.length !== SEPA_IBAN_LENGTHS[country]) {
+    return `must be ${SEPA_IBAN_LENGTHS[country]} characters for ${country}`;
+  }
+  return ibanCheckDigitsValid(value) ? null : "has invalid IBAN check digits";
+}
+
+// The country of an IBAN a cross-border profile can pay, from some debtor account; null for anything else.
+// Exported for nofipa-payments' ingest, so that it accepts exactly the creditor accounts this signer does;
+// assertModeledIbanAccount adds the home-country rule, which depends on the template.
+export function sepaIbanCountry(value) {
+  return sepaIbanProblem(value) === null ? value.slice(0, 2) : null;
+}
+
+// A creditor IBAN the cross-border profiles can pay: { type: "IBAN", value } only, a SEPA country's IBAN
+// of that country's length with valid check digits, and never of the debtor's own country, whose payouts
+// the domestic templates make. `type` is bank-honored, so it is pinned as the BBAN accounts' is. Returns
+// the IBAN's country.
+function assertModeledIbanAccount(name, account, homeCountry) {
+  assertModeledObject(name, account, ["type", "value"], []);
+  if (account.type !== "IBAN") {
+    throw new RangeError(`${name}.type must be "IBAN"`);
+  }
+  const problem = sepaIbanProblem(account.value);
+  if (problem !== null) {
+    throw new RangeError(`${name}.value ${problem}`);
+  }
+  const country = account.value.slice(0, 2);
+  if (country === homeCountry) {
+    throw new RangeError(`${name}.value must not be a ${homeCountry} IBAN: pay it with a domestic template`);
+  }
+  return country;
+}
+
+// A BIC may route a payment to an IBAN of `ibanCountry`: the BIC's country is that country, or one of the
+// SEPA territories using its IBANs (SEPA_IBAN_TERRITORIES).
+function bicCountryFitsIban(bic, ibanCountry) {
+  const bicCountry = bic.slice(4, 6);
+  return bicCountry === ibanCountry || (SEPA_IBAN_TERRITORIES[ibanCountry] ?? []).includes(bicCountry);
+}
+
+// A cross-border creditor account as the approver sees it: the IBAN in groups of four, the way it is
+// printed, and the BIC after it when the body names one. At most 31 + 7 + 5 + 11 = 54 characters.
+function ibanAccountDisplay(account, bank) {
+  const grouped = account.value.match(/.{1,4}/gu).join(" ");
+  return hasOwn(bank, "bic") ? `${grouped} BIC ${bank.bic}` : grouped;
+}
+
 // The Corporate Payout v2 templates this signer models, one closed profile each. A body is checked
 // against exactly the profile its template_id names, so a field one template allows is still refused
 // in the other.
@@ -839,11 +937,22 @@ export function seBankForBban(bban) {
 //     number).
 //   - accountDisplay: "clearing-account" displays the creditor account the Swedish way; otherwise the
 //     DK rules in domesticAccountDisplay apply.
+//   - currencies: the payment currencies; debtorCurrency: the debtor account's currency, which is the
+//     payment's in the domestic templates and the account's own in the cross-border ones.
+//   - bban: the debtor account's BBAN pattern, and the creditor's unless creditorAccount is "iban".
+//   - creditorAccount "iban": the creditor account is an IBAN of a SEPA country other than homeCountry
+//     (assertModeledIbanAccount), displayed by ibanAccountDisplay; creditorBank "iban_bic" then takes an
+//     empty creditor.bank or one holding only a BIC of the IBAN's country (bicCountryFitsIban).
+//   - referenceMaxLengths: what Nordea takes in end_to_end_id and debtor.own_reference, where it takes
+//     less than MAX_BANK_BODY_FIELD. A longer reference is refused here, not by the bank after approval.
+//   - purposeCodeAbove: per payment currency, the amount above which regulatory_reporting is required.
 const BANK_BODY_PROFILES = Object.freeze({
   // The sandbox-confirmed DK shape produced by the demo fixtures.
   INSTANT_CREDIT_TRANSFER_DK: Object.freeze({
-    currency: "DKK",
+    currencies: Object.freeze(["DKK"]),
+    debtorCurrency: "DKK",
     bban: BBAN_VALUE,
+    requiredBodyKeys: Object.freeze([]),
     optionalBodyKeys: Object.freeze(["end_to_end_id", "external_id"]),
     debtorAccountCurrency: "optional",
     creditorNameForms: Object.freeze(["name"]),
@@ -861,8 +970,10 @@ const BANK_BODY_PROFILES = Object.freeze({
   // 2026-10-29). So bic is required here and bank_code optional. The sandbox does not check this, which is
   // why the bank-less body passed it.
   DOMESTIC_CREDIT_TRANSFER_SE: Object.freeze({
-    currency: "SEK",
+    currencies: Object.freeze(["SEK"]),
+    debtorCurrency: "SEK",
     bban: SE_BBAN_VALUE,
+    requiredBodyKeys: Object.freeze([]),
     optionalBodyKeys: Object.freeze(["external_id"]),
     debtorAccountCurrency: "required",
     creditorNameForms: Object.freeze(["name"]),
@@ -878,8 +989,10 @@ const BANK_BODY_PROFILES = Object.freeze({
   // The name: the sandbox requires creditor.name and production refused it (2026-10-29), so the old
   // name_details form and no name are modeled too, for the SDV test (docs/sek-sdv-plan.md §9.5).
   SDV_DOMESTIC_PAYMENT_SE: Object.freeze({
-    currency: "SEK",
+    currencies: Object.freeze(["SEK"]),
+    debtorCurrency: "SEK",
     bban: SE_BBAN_VALUE,
+    requiredBodyKeys: Object.freeze([]),
     optionalBodyKeys: Object.freeze(["external_id"]),
     debtorAccountCurrency: "required",
     creditorNameForms: Object.freeze(["name", "name_details", "none"]),
@@ -887,9 +1000,67 @@ const BANK_BODY_PROFILES = Object.freeze({
     optionalCreditorKeys: Object.freeze(["message"]),
     creditorBank: "se_bic",
     accountDisplay: "clearing-account"
+  }),
+  // A SEPA-area payout in EUR, DKK or SEK from Pasago's DKK account (nofipa-payments payout type "sepa").
+  // Nordea has no SEPA template for Denmark or Sweden: its cross-border templates carry SEPA credit
+  // transfers too. Confirmed against the sandbox on 2026-11-02 in the v2.27 shape: creditor.name (it
+  // refuses name_details), and charges_rule, creditor.bank (an empty object is enough),
+  // creditor.address_details and a non-empty creditor.message, all four of which it requires. It takes an
+  // end_to_end_id of up to 35 characters and an own_reference of up to 20.
+  //   - charges_rule decides what the creditor receives, and is not displayed, so it is pinned to SHA,
+  //     the sharing SEPA requires. urgency, the exchange-rate fields, send_as_currency, the ultimate and
+  //     intermediary parties, lei, uetr, sepa_purpose_code and requested_execution_date are not modeled.
+  //   - The sandbox takes a BIC of another country than the IBAN's. Here it must be of the IBAN's own
+  //     country, and it is displayed.
+  CROSS_BORDER_DK: Object.freeze({
+    currencies: Object.freeze(["EUR", "DKK", "SEK"]),
+    debtorCurrency: "DKK",
+    bban: BBAN_VALUE,
+    requiredBodyKeys: Object.freeze(["charges_rule"]),
+    optionalBodyKeys: Object.freeze(["end_to_end_id", "external_id"]),
+    debtorAccountCurrency: "required",
+    creditorNameForms: Object.freeze(["name"]),
+    requiredCreditorKeys: Object.freeze(["address_details", "bank", "message"]),
+    optionalCreditorKeys: Object.freeze([]),
+    creditorBank: "iban_bic",
+    creditorAccount: "iban",
+    homeCountry: "DK",
+    referenceMaxLengths: Object.freeze({ end_to_end_id: 35, own_reference: 20 })
+  }),
+  // CROSS_BORDER_DK from Pasago's SEK account, as sandbox-confirmed the same day, with an own_reference of
+  // up to 16 characters. regulatory_reporting.purpose_code is the code Skatteverket defines for its
+  // reporting of payments abroad above 150,000 SEK: statistics, not routing, so signed and not displayed.
+  // A SEK payment above that must carry one. An EUR or DKK amount cannot be converted here, so for those
+  // nofipa-payments' ingest refuses an amount that could be above it (SE_PURPOSE_CODE_REQUIRED).
+  CROSS_BORDER_SE: Object.freeze({
+    currencies: Object.freeze(["EUR", "DKK", "SEK"]),
+    debtorCurrency: "SEK",
+    bban: SE_BBAN_VALUE,
+    requiredBodyKeys: Object.freeze(["charges_rule"]),
+    optionalBodyKeys: Object.freeze(["end_to_end_id", "external_id", "regulatory_reporting"]),
+    debtorAccountCurrency: "required",
+    creditorNameForms: Object.freeze(["name"]),
+    requiredCreditorKeys: Object.freeze(["address_details", "bank", "message"]),
+    optionalCreditorKeys: Object.freeze([]),
+    creditorBank: "iban_bic",
+    creditorAccount: "iban",
+    homeCountry: "SE",
+    referenceMaxLengths: Object.freeze({ end_to_end_id: 35, own_reference: 16 }),
+    purposeCodeAbove: Object.freeze({ SEK: "150000.00" })
   })
 });
 const BANK_BODY_REQUIRED_KEYS = Object.freeze(["template_id", "amount", "currency", "debtor", "creditor"]);
+// Every top-level key beyond the required ones that some profile allows: the first, profile-blind check.
+const BANK_BODY_ANY_PROFILE_KEYS = Object.freeze([...new Set(Object.values(BANK_BODY_PROFILES)
+  .flatMap((profile) => [...profile.requiredBodyKeys, ...profile.optionalBodyKeys]))]);
+const CROSS_BORDER_CHARGES_RULE = "SHA";
+const SE_PURPOSE_CODE = /^[0-9]{3}$/u;
+
+// "A", "A" or "B", "A", "B" or "C": the values an error message names.
+function quotedChoices(values) {
+  const quoted = values.map((value) => `"${value}"`);
+  return quoted.length === 1 ? quoted[0] : `${quoted.slice(0, -1).join(", ")} or ${quoted.at(-1)}`;
+}
 
 // At most one name form is present, and one the profile takes; none at all only where it takes "none".
 // name_details is modeled as { line1 } only. 35 is deliberately short: the docs give only the newer
@@ -950,31 +1121,47 @@ function parseBankBodyV1(bodyBytes) {
   // used for backend idempotency/matching); neither determines recipient or amount, so they are
   // allow-listed but not displayed. The first check is against every key any profile allows, so a
   // body is an object with known keys before its template_id picks the profile.
-  assertModeledObject("bank body", body, BANK_BODY_REQUIRED_KEYS, ["end_to_end_id", "external_id"]);
+  assertModeledObject("bank body", body, BANK_BODY_REQUIRED_KEYS, BANK_BODY_ANY_PROFILE_KEYS);
   if (typeof body.template_id !== "string" || !hasOwn(BANK_BODY_PROFILES, body.template_id)) {
     const names = Object.keys(BANK_BODY_PROFILES).map((name) => `"${name}"`).join(" or ");
     throw new RangeError(`template_id must be ${names}`);
   }
   const profile = BANK_BODY_PROFILES[body.template_id];
-  assertModeledObject("bank body", body, BANK_BODY_REQUIRED_KEYS, profile.optionalBodyKeys);
+  assertModeledObject("bank body", body, [...BANK_BODY_REQUIRED_KEYS, ...profile.requiredBodyKeys],
+    profile.optionalBodyKeys);
   assertPattern("amount", body.amount, AMOUNT_DECIMAL);
-  if (body.currency !== profile.currency) {
-    throw new RangeError(`currency must be "${profile.currency}"`);
+  if (!profile.currencies.includes(body.currency)) {
+    throw new RangeError(`currency must be ${quotedChoices(profile.currencies)}`);
   }
-  assertOptionalDisplaySafeText("bank body", body, "end_to_end_id", MAX_BANK_BODY_FIELD);
+  const referenceMax = (key) => profile.referenceMaxLengths?.[key] ?? MAX_BANK_BODY_FIELD;
+  assertOptionalDisplaySafeText("bank body", body, "end_to_end_id", referenceMax("end_to_end_id"));
   assertOptionalDisplaySafeText("bank body", body, "external_id", MAX_BANK_BODY_FIELD);
+  // Only the cross-border profiles take these two, and require the first.
+  if (hasOwn(body, "charges_rule") && body.charges_rule !== CROSS_BORDER_CHARGES_RULE) {
+    throw new RangeError(`charges_rule must be "${CROSS_BORDER_CHARGES_RULE}"`);
+  }
+  if (hasOwn(body, "regulatory_reporting")) {
+    assertModeledObject("regulatory_reporting", body.regulatory_reporting, ["purpose_code"], []);
+    assertPattern("regulatory_reporting.purpose_code", body.regulatory_reporting.purpose_code, SE_PURPOSE_CODE);
+  }
+  const purposeCodeAbove = profile.purposeCodeAbove?.[body.currency];
+  if (purposeCodeAbove !== undefined && !hasOwn(body, "regulatory_reporting")
+    && BigInt(decimalAmountToMinor(body.amount)) > BigInt(decimalAmountToMinor(purposeCodeAbove))) {
+    throw new RangeError(`regulatory_reporting.purpose_code is required above ${purposeCodeAbove} ${body.currency}`);
+  }
 
   // own_reference is the debtor's own statement text; debtor.account.currency is the funding-account
-  // currency (equal to the payment currency in every modeled template) — both execution-neutral here.
+  // currency (the payment currency in the domestic templates, the account's own in the cross-border
+  // ones) — both execution-neutral here.
   assertModeledObject("debtor", body.debtor, ["account"], ["own_reference"]);
-  assertOptionalDisplaySafeText("debtor", body.debtor, "own_reference", MAX_BANK_BODY_FIELD);
+  assertOptionalDisplaySafeText("debtor", body.debtor, "own_reference", referenceMax("own_reference"));
   assertModeledBbanAccount("debtor.account", body.debtor.account, {
     required: profile.debtorAccountCurrency === "required" ? ["currency"] : [],
     optional: profile.debtorAccountCurrency === "required" ? [] : ["currency"],
     pattern: profile.bban
   });
-  if (hasOwn(body.debtor.account, "currency") && body.debtor.account.currency !== profile.currency) {
-    throw new RangeError(`debtor.account.currency must be "${profile.currency}"`);
+  if (hasOwn(body.debtor.account, "currency") && body.debtor.account.currency !== profile.debtorCurrency) {
+    throw new RangeError(`debtor.account.currency must be "${profile.debtorCurrency}"`);
   }
 
   // A profile with only creditor.name keeps it a required key, so DK and the SE transfer refuse exactly
@@ -986,7 +1173,26 @@ function parseBankBodyV1(bodyBytes) {
     [...(nameRequired ? [] : nameKeys), ...profile.optionalCreditorKeys]);
   assertCreditorName(body.creditor, profile.creditorNameForms);
   assertOptionalDisplaySafeText("creditor", body.creditor, "message", 140);
-  assertModeledBbanAccount("creditor.account", body.creditor.account, { pattern: profile.bban });
+  if (profile.requiredCreditorKeys.includes("message") && body.creditor.message.length < 1) {
+    throw new RangeError("creditor.message must not be empty");
+  }
+  let ibanCountry = null;
+  if (profile.creditorAccount === "iban") {
+    ibanCountry = assertModeledIbanAccount("creditor.account", body.creditor.account, profile.homeCountry);
+  } else {
+    assertModeledBbanAccount("creditor.account", body.creditor.account, { pattern: profile.bban });
+  }
+  if (profile.creditorBank === "iban_bic") {
+    // The BIC routes the money and is displayed beside the IBAN. Nordea's sandbox takes one of another
+    // country, so it is bound to the IBAN's here: an IBAN-only body, the SEPA norm, sends {}.
+    assertModeledObject("creditor.bank", body.creditor.bank, [], ["bic"]);
+    if (hasOwn(body.creditor.bank, "bic")) {
+      assertPattern("creditor.bank.bic", body.creditor.bank.bic, BIC_VALUE);
+      if (!bicCountryFitsIban(body.creditor.bank.bic, ibanCountry)) {
+        throw new RangeError("creditor.bank.bic must be of the creditor account's country");
+      }
+    }
+  }
   if (profile.creditorBank === "dk" && hasOwn(body.creditor, "bank")) {
     // bank.bank_code is bound to the signed BBAN (validated against the registration prefix in
     // domesticAccountDisplay); bank.country is a display hint.
@@ -1090,7 +1296,9 @@ export function deriveVisiblePaymentFromBankBodyV1(bodyBytes) {
 
   return normalizeVisiblePaymentV1({
     creditor_name: creditorNameOf(body.creditor),
-    creditor_account: domesticAccountDisplay(body.creditor.account, body.creditor.bank, body),
+    creditor_account: BANK_BODY_PROFILES[body.template_id].creditorAccount === "iban"
+      ? ibanAccountDisplay(body.creditor.account, body.creditor.bank)
+      : domesticAccountDisplay(body.creditor.account, body.creditor.bank, body),
     debtor_account_masked: maskAccount(body.debtor.account.value),
     amount_minor: amountMinor,
     currency: body.currency,

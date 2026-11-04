@@ -21,7 +21,7 @@
     },
     {
       "path": "service-worker.js",
-      "sha256": "8f776ded72785f26e5a776f3865ba4a18952b1ca3f38b4a3eebac6ed92cbf9db"
+      "sha256": "60dc38d1bc02410e007eee5e017203f03532e116b0d0d7437a873e03204883ba"
     },
     {
       "path": "src/admin-request.js",
@@ -97,11 +97,11 @@
     },
     {
       "path": "src/core/protocol/envelopes.js",
-      "sha256": "e157078e0d326a476dd77ec08f36141f3a9fc9b97e93194de709143347aad85e"
+      "sha256": "c0c270aec99127734d2e0056fcdeecc8f64930711bf19052d3b0f977db04881e"
     },
     {
       "path": "src/core/protocol/release.js",
-      "sha256": "0f75565d5577ef2157b977df372f2b244d512896e281ce85e621a79eb8dc8022"
+      "sha256": "6d78e7045389d1a11d66788260cfda079b20fba6b95930594db5da1c07d87e96"
     },
     {
       "path": "src/core/protocol/signing.js",
