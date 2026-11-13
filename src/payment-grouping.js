@@ -1,6 +1,6 @@
 import { base64urlToBytes } from "./core/crypto/bytes.js";
 import { stableStringify } from "./core/protocol/canonical.js";
-import { deriveVisiblePaymentFromInput } from "./payment-view.js";
+import { deriveVisiblePaymentFromInput, executionDateTextFromInput } from "./payment-view.js";
 
 // ---- split-payout grouping ---------------------------------------------------------------------
 //
@@ -210,6 +210,14 @@ function assembleRows(members) {
   return { rows, paymentCount: rows.length, transferCount: members.length };
 }
 
+// The visible payment, plus execution_date_text only for a payment whose signed body carries a requested
+// execution date: an undated payment's row is exactly the visible payment, as before.
+function pendingPayment(input) {
+  const payment = deriveVisiblePaymentFromInput(input);
+  const executionDateText = executionDateTextFromInput(input);
+  return executionDateText === "" ? payment : { ...payment, execution_date_text: executionDateText };
+}
+
 /**
  * Pending approval rows. Takes the bundle's payment_inputs verbatim and never mutates them.
  * MUST run only after validateBundleForApprovalV1 has accepted the bundle.
@@ -219,7 +227,7 @@ export function buildBundleRowModel(paymentInputs) {
   return assembleRows(
     inputs.map((input, index) => ({
       index,
-      payment: deriveVisiblePaymentFromInput(input),
+      payment: pendingPayment(input),
       split: parseSplitId(input?.request_id),
       eligible: true,
       signature: pendingSignature(input)

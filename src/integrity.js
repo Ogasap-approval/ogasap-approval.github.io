@@ -50,6 +50,7 @@ export const APP_INTEGRITY_GRAPH = [
   "src/core/protocol/canonical.js",
   "src/core/protocol/envelopes.js",
   "src/core/protocol/release.js",
+  "src/core/protocol/se-execution-date.js",
   "src/core/protocol/signing.js"
 ];
 

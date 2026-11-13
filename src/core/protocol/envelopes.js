@@ -2,6 +2,7 @@ import { base64urlToBytes, bytesToHex, utf8Encode } from "../crypto/bytes.js";
 import { emsaPkcs1v15Encode, sha256 } from "../crypto/pkcs1v15.js";
 import { canonicalJsonBytes, canonicalText, sha256Hex, stableStringify } from "./canonical.js";
 import { PROTOCOL_RELEASE_ID } from "./release.js";
+import { isCalendarDateString, seExecutionDateFor } from "./se-execution-date.js";
 
 const BACKEND_PATH = /^\/api\/approval(\/[A-Za-z0-9._~!$&'()*+,;=:@%-]+)*$/u;
 const HEX_64 = /^[a-f0-9]{64}$/u;
@@ -36,6 +37,12 @@ const MAX_BODY_BASE64URL_LENGTH = 350000;
 const BANK_SIGNED_HEADER_COUNT = 5;
 const BANK_READ_SIGNED_HEADER_COUNT = 3;
 const MAX_POLLING_CAPABILITY_REQUESTS = 2500;
+// The pre-signed status-polling horizons a package may claim, in hours. 96 is the current phone's: a payout
+// dated over a weekend executes up to about 83 hours after its approval (Friday 13:25 to Monday 24:00), which
+// 72 hourly capabilities do not reach. 72 is what the previous release signed, so a verifier on this version
+// still accepts those packages during a rollout. Everything else about a package is checked against the
+// horizon it claims, never against the other one.
+export const POLLING_CAPABILITY_ACCEPTED_HORIZON_HOURS = Object.freeze([72, 96]);
 const MAX_POLLING_EXTERNAL_IDS = 20;
 const ORIGINATING_HOST_HEADER = /^x-[a-z0-9-]+-originating-host$/u;
 const ORIGINATING_DATE_HEADER = /^x-[a-z0-9-]+-originating-date$/u;
@@ -48,6 +55,15 @@ const PROTOCOL_RELEASE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]{7,127}$/u;
 // deploy skew between the phone and the backend fails closed and attributably
 // instead of as an opaque signature mismatch at payment time.
 export { PROTOCOL_RELEASE_ID };
+// The rule for requested_execution_date on the SE transfer (docs/protocol.md), re-exported so
+// nofipa-payments can import it from the envelopes entry point it already uses.
+export {
+  SE_EXECUTION_DATE_CUTOFF,
+  SE_EXECUTION_DATE_MAX_GAP_DAYS,
+  SE_EXECUTION_DATE_TIME_ZONE,
+  isSwedishBankingDay,
+  seExecutionDateFor
+} from "./se-execution-date.js";
 export const ACCEPTED_PROTOCOL_RELEASE_IDS = Object.freeze([PROTOCOL_RELEASE_ID]);
 
 export class ProtocolReleaseError extends Error {
@@ -963,6 +979,9 @@ const BANK_BODY_PROFILES = Object.freeze({
   // A standard (not instant) Swedish transfer, confirmed against the sandbox on 2026-10-26
   // (nofipa-payments docs/sek-payouts-plan.md §3.1). Nordea refuses end_to_end_id here and requires
   // the debtor account currency. An address was not probed, so it is refused.
+  // requested_execution_date is the one date key, and only here: when present it is exactly the date
+  // seExecutionDateFor gives for the signed originating date and the creditor account, which
+  // validateBankSigningInputV1 binds. It is never required (docs/protocol.md).
   // creditor.bank follows the Corporate Payout API reference's DomesticCreditTransferSe model: bic and
   // bank_code are "not required for Nordea internal transfers but mandatory for payments to other Swedish
   // banks". Nordea's Corporate Payout API FAQ calls only the BIC mandatory: without it the payment is treated
@@ -974,7 +993,7 @@ const BANK_BODY_PROFILES = Object.freeze({
     debtorCurrency: "SEK",
     bban: SE_BBAN_VALUE,
     requiredBodyKeys: Object.freeze([]),
-    optionalBodyKeys: Object.freeze(["external_id"]),
+    optionalBodyKeys: Object.freeze(["external_id", "requested_execution_date"]),
     debtorAccountCurrency: "required",
     creditorNameForms: Object.freeze(["name"]),
     requiredCreditorKeys: Object.freeze([]),
@@ -1136,6 +1155,11 @@ function parseBankBodyV1(bodyBytes) {
   const referenceMax = (key) => profile.referenceMaxLengths?.[key] ?? MAX_BANK_BODY_FIELD;
   assertOptionalDisplaySafeText("bank body", body, "end_to_end_id", referenceMax("end_to_end_id"));
   assertOptionalDisplaySafeText("bank body", body, "external_id", MAX_BANK_BODY_FIELD);
+  // Only the SE transfer takes the date. Here it must be a real calendar date; whether it is the right one
+  // needs the signed originating date and is bound by validateBankSigningInputV1.
+  if (hasOwn(body, "requested_execution_date") && !isCalendarDateString(body.requested_execution_date)) {
+    throw new RangeError("requested_execution_date must be a YYYY-MM-DD calendar date");
+  }
   // Only the cross-border profiles take these two, and require the first.
   if (hasOwn(body, "charges_rule") && body.charges_rule !== CROSS_BORDER_CHARGES_RULE) {
     throw new RangeError(`charges_rule must be "${CROSS_BORDER_CHARGES_RULE}"`);
@@ -1282,9 +1306,7 @@ function domesticAccountDisplay(account, bank, body) {
   return value;
 }
 
-export function deriveVisiblePaymentFromBankBodyV1(bodyBytes) {
-  const body = parseBankBodyV1(bodyBytes);
-
+function visiblePaymentOfBankBodyV1(body) {
   const amountMinor = decimalAmountToMinor(body.amount);
   const minor = BigInt(amountMinor);
   if (minor <= 0n) {
@@ -1304,6 +1326,47 @@ export function deriveVisiblePaymentFromBankBodyV1(bodyBytes) {
     currency: body.currency,
     remittance_text: hasOwn(body.creditor, "message") ? body.creditor.message : ""
   });
+}
+
+export function deriveVisiblePaymentFromBankBodyV1(bodyBytes) {
+  return visiblePaymentOfBankBodyV1(parseBankBodyV1(bodyBytes));
+}
+
+// The date a body asks the bank to execute on, "YYYY-MM-DD", or null when it names none (the bank then
+// executes the payout on the day it is confirmed). Strictly parsed like the visible payment, so only a
+// date a profile models is ever returned. It is NOT part of the visible payment or its hash: the approver
+// is shown it beside the payment (pwa/src/payment-view.js), and validateBankSigningInputV1 bounds it.
+export function requestedExecutionDateOfBankBodyV1(bodyBytes) {
+  const body = parseBankBodyV1(bodyBytes);
+  return hasOwn(body, "requested_execution_date") ? body.requested_execution_date : null;
+}
+
+// The originating-date header's instant, as epoch milliseconds, from the validated signed headers.
+function originatingInstantOfSignedHeadersV1(headers) {
+  const value = headers[2].value;
+  if (!isNordeaAdminHttpDate(value)) {
+    throw new RangeError("the originating date header must be an IMF-fixdate to bound requested_execution_date");
+  }
+  return Date.parse(value);
+}
+
+// requested_execution_date is bounded, never demanded: a body without it is valid at any time, a body with
+// it must carry exactly the date the rule gives for the signed originating instant and the creditor
+// account. A null result, the rule dating no payout then, refuses a date. Names no account digits.
+function assertRequestedExecutionDateBoundV1(body, headers) {
+  if (!hasOwn(body, "requested_execution_date")) {
+    return;
+  }
+  const expected = seExecutionDateFor({
+    instant: originatingInstantOfSignedHeadersV1(headers),
+    creditorBban: body.creditor.account.value
+  });
+  if (expected === null) {
+    throw new RangeError("requested_execution_date is not allowed: the rule dates no payout at its originating date");
+  }
+  if (body.requested_execution_date !== expected) {
+    throw new RangeError("requested_execution_date is not the date the rule gives for the originating date");
+  }
 }
 
 export function calculateTotalsFromVisiblePaymentsV1(visiblePayments) {
@@ -1334,12 +1397,16 @@ export async function validateBankSigningInputV1(input, cryptoProvider = globalT
     throw new Error("Bank body hash mismatch");
   }
 
-  const visiblePayment = deriveVisiblePaymentFromBankBodyV1(bodyBytes);
+  const body = parseBankBodyV1(bodyBytes);
+  const visiblePayment = visiblePaymentOfBankBodyV1(body);
   const suppliedVisiblePayment = normalizeVisiblePaymentV1(input.visible_payment);
   if (!sameJSON(visiblePayment, suppliedVisiblePayment)) {
     throw new Error("visible payment mismatch");
   }
 
+  // Validated headers (the date header is index 2) are what the bound reads, the same headers the signing
+  // string is built from.
+  assertRequestedExecutionDateBoundV1(body, validateBankSignedHeadersV1(input.signed_headers, actualBodyHash));
   const signingString = bankHttpSigningStringV1(input);
   const signingStringBytes = utf8Encode(signingString);
   return {
@@ -2616,8 +2683,12 @@ export function validatePollingCapabilityPackageV1(pkg) {
   if (pkg.slot_interval_minutes !== 60) {
     throw new RangeError("polling slot_interval_minutes must be 60");
   }
-  if (pkg.horizon_hours !== 72) {
-    throw new RangeError("polling horizon_hours must be 72");
+  if (!POLLING_CAPABILITY_ACCEPTED_HORIZON_HOURS.includes(pkg.horizon_hours)) {
+    throw new RangeError(`polling horizon_hours must be ${POLLING_CAPABILITY_ACCEPTED_HORIZON_HOURS.join(" or ")}`);
+  }
+  // The package's own horizon: it ends exactly horizon_hours after it was created.
+  if (Date.parse(pkg.valid_until) - Date.parse(pkg.created_at) !== pkg.horizon_hours * 60 * 60_000) {
+    throw new RangeError("polling valid_until must be created_at plus horizon_hours");
   }
   if (!Array.isArray(pkg.requests) || pkg.requests.length > MAX_POLLING_CAPABILITY_REQUESTS) {
     throw new RangeError(`polling requests must contain at most ${MAX_POLLING_CAPABILITY_REQUESTS} entries`);
@@ -2627,7 +2698,7 @@ export function validatePollingCapabilityPackageV1(pkg) {
     if (!["deterministic", "bundle_payment_status"].includes(request.scope)) {
       throw new RangeError("polling request scope is invalid");
     }
-    if (!Number.isInteger(request.slot_index) || request.slot_index < 0 || request.slot_index > 96) {
+    if (!Number.isInteger(request.slot_index) || request.slot_index < 0 || request.slot_index >= pkg.horizon_hours) {
       throw new RangeError("polling request slot_index is invalid");
     }
     if (

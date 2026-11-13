@@ -355,6 +355,19 @@ function emptyRow(text = "-") {
   return row;
 }
 
+// The remittance text, and under it the execution date line when the signed body names one. Both come from
+// the signed body (payment-view.js), so the approver sees the date the bank will be asked to pay on.
+function remittanceCell(payment) {
+  const value = cell(payment.remittance_text || "-");
+  if (payment.execution_date_text) {
+    const line = document.createElement("span");
+    line.className = "payment-execution-date";
+    line.textContent = payment.execution_date_text;
+    value.append(document.createElement("br"), line);
+  }
+  return value;
+}
+
 function appendPaymentRows(target, payments) {
   target.replaceChildren();
   if (payments.length === 0) {
@@ -370,7 +383,7 @@ function appendPaymentRows(target, payments) {
       // the account the bank will actually debit -- not a field the server asserted alongside it.
       cell(payment.debtor_account_masked || "-"),
       cell(payment.creditor_account || "-"),
-      cell(payment.remittance_text || "-"),
+      remittanceCell(payment),
       cell(amountMinorToDecimal(payment.amount_minor, payment.currency), "numeric")
     );
     target.append(row);

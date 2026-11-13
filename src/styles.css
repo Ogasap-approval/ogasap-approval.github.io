@@ -898,6 +898,12 @@ tr:last-child td {
   line-height: 1.25;
 }
 
+.payment-execution-date {
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
 .approval-footer {
   margin-top: 16px;
 }

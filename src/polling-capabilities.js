@@ -1,12 +1,14 @@
 import { base64urlToBytes, utf8Decode } from "./core/crypto/bytes.js";
 
-export const POLLING_CAPABILITY_HORIZON_HOURS = 72;
+// 96, not 72: a payout dated over a weekend executes up to about 83 hours after its approval. The core
+// validator still accepts the 72 hours of the previous release (POLLING_CAPABILITY_ACCEPTED_HORIZON_HOURS).
+export const POLLING_CAPABILITY_HORIZON_HOURS = 96;
 export const POLLING_CAPABILITY_SLOT_INTERVAL_MINUTES = 60;
 
 // WHERE THE FIRST READ CAPABILITY IS DATED, and why it is now the approval instant rather than half an
 // hour after it.
 //
-// The phone pre-signs one read GET per hourly slot across the 72h horizon. The service replays the newest
+// The phone pre-signs one read GET per hourly slot across the 96h horizon. The service replays the newest
 // slot that has ALREADY OPENED; it never replays a future-dated one, because Nordea refuses those outright
 // (`401 error.date.invalid`, "X-Nordea-Originating-Date header points to date from the future"). So the
 // offset is not a delay before the first read is DUE — it is a span during which no replayable capability
@@ -22,7 +24,7 @@ export const POLLING_CAPABILITY_SLOT_INTERVAL_MINUTES = 60;
 // same thing again, only smaller. The thing a positive offset might seem to protect against is this
 // phone's clock running ahead of the bank's, which would make slot 0 future-dated and refused — but:
 //
-//   - `approvedAt` is stamped BEFORE the signing batch runs (approval-kernel.js), and this bundle's 72+
+//   - `approvedAt` is stamped BEFORE the signing batch runs (approval-kernel.js), and this bundle's 96+
 //     threshold signatures take real seconds. By the time the package reaches the service, slot 0 is
 //     already dated in the past by however long that took, and that buffer widens with bundle size.
 //   - The service compares each signed date to ITS OWN clock and silently skips anything still in the

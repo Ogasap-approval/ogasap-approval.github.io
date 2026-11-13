@@ -71,7 +71,7 @@ function knownCount(signatureCount) {
  *
  * WHY THIS IS A CLOCK AND NOT A PERCENTAGE. By the time this shows, the phone's part is finished and the
  * server's has not reported anything. Before it answers, the server combines its two company shares with
- * EVERY signature the phone sent — each payment, plus one pre-signed status read per hour of the 72h polling
+ * EVERY signature the phone sent — each payment, plus one pre-signed status read per hour of the 96h polling
  * horizon — checks each combined signature, and records the approval. Nothing goes to the bank until that
  * answer has been sent. For the two-payment bundle approved on 2026-09-15 that was 74 combines and a 25.7s
  * POST, longer than all of the phone-side signing put together.
