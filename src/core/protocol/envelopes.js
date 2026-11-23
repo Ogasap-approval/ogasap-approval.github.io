@@ -20,6 +20,23 @@ const BBAN_VALUE = /^[0-9]{14}$/u;
 // the maximum length is 15 digits"). So a BBAN starting with 8 has a five-digit clearing number.
 const SE_BBAN_VALUE = /^(?:8[0-9]{4}|[0-79][0-9]{3})[0-9]{7,10}$/u;
 const seClearingLength = (bban) => (bban.startsWith("8") ? 5 : 4);
+// A Nordea personkonto as the Corporate Payout API takes it: the ten account digits alone (the holder's
+// personnummer, YYMMDDXXXX), WITHOUT the 3300 clearing number. Nordea's Corporate Payout API FAQ, on
+// credit_account_invalid: "Please also bear in mind that for payments to Nordea personkonto you should not
+// use 3300 prefix. It can also cause such error." Production refused both payouts sent as 3300 and the ten
+// digits that way (2026-11-17, 2026-11-23). The 3300 rule is "Corporate Access Payables - Appendix Sweden"
+// 2.3.5, which describes the XML product, not this API.
+//   - Ten digits are shorter than every BBAN SE_BBAN_VALUE takes (eleven at least), so the two forms never
+//     overlap and a value is one or the other by its length alone.
+//   - Such a value HAS NO CLEARING NUMBER. Its first four digits are a year and a month of birth and are
+//     never looked up: 8501011234 is not Swedbank's 8501 (seClearingRow).
+//   - No check digit is checked: the owner sends the customer's account as given and lets Nordea decide.
+//   - Only the creditor of DOMESTIC_CREDIT_TRANSFER_SE takes it (SE_CREDITOR_BBAN_VALUE). Every debtor and
+//     every other template keep SE_BBAN_VALUE.
+const SE_PERSONKONTO_VALUE = /^[0-9]{10}$/u;
+const SE_CREDITOR_BBAN_VALUE = /^(?:[0-9]{10}|(?:8[0-9]{4}|[0-79][0-9]{3})[0-9]{7,10})$/u;
+// The clearing number a personkonto is written with, and displayed with. It is never sent.
+const SE_PERSONKONTO_CLEARING = "3300";
 const DISPLAY_UNSAFE = /[\p{Cc}\p{Cf}\p{Cs}\p{Noncharacter_Code_Point}]/u;
 // Nordea's InstantCreditorAddressDk rules, confirmed against the sandbox: an uppercase ISO 3166 alpha-2
 // country and a 1..35 character town from a fixed character set. Both anchored over the WHOLE string
@@ -814,10 +831,24 @@ const SE_CLEARING_BANKS = Object.freeze([
 // BSAB gives this BIC to every range Nordea holds, personkonto and Plusgirot included.
 const NORDEA_SE_BIC = "NDEASESS";
 
+// The personkonto row: what a ten-digit value (SE_PERSONKONTO_VALUE) is, whatever its digits are.
+const SE_PERSONKONTO_ROW = SE_CLEARING_BANKS.find(([from, to]) => from === 3300 && to === 3300);
+
+// Whether a value is a Nordea personkonto in the form the Corporate Payout API takes: exactly ten digits,
+// with no clearing number (SE_PERSONKONTO_VALUE). The same account written as 3300 and the ten digits is a
+// fourteen-digit BBAN, not this.
+export function isSePersonkontoBban(value) {
+  return typeof value === "string" && SE_PERSONKONTO_VALUE.test(value);
+}
+
 // The table row for a Swedish BBAN's clearing number: its first four digits, which for Swedbank's 8000
 // series leave out the fifth (check) digit. null when the value is not a Swedish BBAN or its clearing
-// number is in no listed range.
+// number is in no listed range. A ten-digit personkonto is decided FIRST and by its length alone: it has no
+// clearing number, so its first four digits are never read as one, and its row is always Nordea's.
 function seClearingRow(bban) {
+  if (isSePersonkontoBban(bban)) {
+    return SE_PERSONKONTO_ROW;
+  }
   if (typeof bban !== "string" || !SE_BBAN_VALUE.test(bban)) {
     return null;
   }
@@ -826,14 +857,16 @@ function seClearingRow(bban) {
 }
 
 // The BIC BSAB lists for a Swedish BBAN's clearing number. null when the value is not a Swedish BBAN, its
-// clearing number is in no listed range, or BSAB lists the range without a BIC.
+// clearing number is in no listed range, or BSAB lists the range without a BIC. A ten-digit personkonto
+// (isSePersonkontoBban) is Nordea's, NDEASESS, and never any other bank's.
 export function seBicForBban(bban) {
   return seClearingRow(bban)?.[2] ?? null;
 }
 
 // The creditor.bank a Swedish BBAN's clearing number calls for, { bank_code, bic }, in that key order.
 // null exactly where seBicForBban is null: a bank without a BIC cannot be named to Nordea. Nordea's own
-// ranges return NDEASESS here; the SE transfer sends no bank for them (see the profile below).
+// ranges, and a ten-digit personkonto, return NDEASESS here; the SE transfer sends no bank for them (see
+// the profile below).
 export function seBankForBban(bban) {
   const row = seClearingRow(bban);
   if (row === null || row[2] === null) {
@@ -955,7 +988,10 @@ function ibanAccountDisplay(account, bank) {
 //     DK rules in domesticAccountDisplay apply.
 //   - currencies: the payment currencies; debtorCurrency: the debtor account's currency, which is the
 //     payment's in the domestic templates and the account's own in the cross-border ones.
-//   - bban: the debtor account's BBAN pattern, and the creditor's unless creditorAccount is "iban".
+//   - bban: the debtor account's BBAN pattern, and the creditor's unless creditorAccount is "iban" or the
+//     profile has a creditorBban.
+//   - creditorBban: the creditor account's BBAN pattern where it takes more than the debtor's. Only the SE
+//     transfer has one: a ten-digit Nordea personkonto beside every BBAN the debtor's pattern takes.
 //   - creditorAccount "iban": the creditor account is an IBAN of a SEPA country other than homeCountry
 //     (assertModeledIbanAccount), displayed by ibanAccountDisplay; creditorBank "iban_bic" then takes an
 //     empty creditor.bank or one holding only a BIC of the IBAN's country (bicCountryFitsIban).
@@ -988,10 +1024,14 @@ const BANK_BODY_PROFILES = Object.freeze({
   // as Nordea-internal and another bank's account is refused as credit_account_invalid (as in production,
   // 2026-10-29). So bic is required here and bank_code optional. The sandbox does not check this, which is
   // why the bank-less body passed it.
+  // The creditor, and only the creditor, may also be a Nordea personkonto as ten digits without a clearing
+  // number (SE_PERSONKONTO_VALUE has the source). It is Nordea's, so it carries no creditor.bank, and it
+  // is displayed as 3300 and the ten digits, the way the account is written.
   DOMESTIC_CREDIT_TRANSFER_SE: Object.freeze({
     currencies: Object.freeze(["SEK"]),
     debtorCurrency: "SEK",
     bban: SE_BBAN_VALUE,
+    creditorBban: SE_CREDITOR_BBAN_VALUE,
     requiredBodyKeys: Object.freeze([]),
     optionalBodyKeys: Object.freeze(["external_id", "requested_execution_date"]),
     debtorAccountCurrency: "required",
@@ -1005,6 +1045,7 @@ const BANK_BODY_PROFILES = Object.freeze({
   // docs/sek-sdv-plan.md). The SE transfer above plus creditor.bank, which the sandbox requires, holding
   // the BIC only: it refuses bank.country and end_to_end_id. The BIC must be the one BSAB lists for the
   // creditor account's clearing number, so it can never route the money elsewhere than the account shown.
+  // A ten-digit personkonto is refused twice over: by the creditor's pattern, and as an account Nordea holds.
   // The name: the sandbox requires creditor.name and production refused it (2026-10-29), so the old
   // name_details form and no name are modeled too, for the SDV test (docs/sek-sdv-plan.md §9.5).
   SDV_DOMESTIC_PAYMENT_SE: Object.freeze({
@@ -1204,7 +1245,7 @@ function parseBankBodyV1(bodyBytes) {
   if (profile.creditorAccount === "iban") {
     ibanCountry = assertModeledIbanAccount("creditor.account", body.creditor.account, profile.homeCountry);
   } else {
-    assertModeledBbanAccount("creditor.account", body.creditor.account, { pattern: profile.bban });
+    assertModeledBbanAccount("creditor.account", body.creditor.account, { pattern: profile.creditorBban ?? profile.bban });
   }
   if (profile.creditorBank === "iban_bic") {
     // The BIC routes the money and is displayed beside the IBAN. Nordea's sandbox takes one of another
@@ -1244,10 +1285,12 @@ function parseBankBodyV1(bodyBytes) {
   }
   if (profile.creditorBank === "se_bank_unless_nordea") {
     // Bank-honored routing that is not displayed, bound to the account that is, as for the SDV BIC. A
-    // Nordea account is sent without a bank, as before (proven in production for an ordinary Nordea account;
-    // personkonto and Plusgirot are not yet proven either way); any other bank's account must
-    // name exactly the BIC, and if it sends one the bank code, that the clearing table lists for it. An
-    // account the table cannot place cannot be paid. No message repeats the account.
+    // Nordea account is sent without a bank, as before (executed in production for an ordinary Nordea
+    // account and for Plusgirot as 9960 and ten digits). A ten-digit personkonto is a Nordea account, so it
+    // carries none either; production refused a personkonto sent as 3300 and the ten digits, a form this
+    // still takes. Any other bank's account must name exactly the BIC, and if it sends one the bank code,
+    // that the clearing table lists for it. An account the table cannot place cannot be paid. No message
+    // repeats the account.
     const expected = seBankForBban(body.creditor.account.value);
     if (expected === null) {
       throw new RangeError("creditor.account has no BIC in the Swedish clearing table");
@@ -1293,6 +1336,13 @@ function domesticAccountDisplay(account, bank, body) {
     // Clearing number and account, the way Swedish banks write them (all five clearing digits for
     // Swedbank's 8000 series). No bank code to cross-check here: parseBankBodyV1 already bound both SE
     // templates' creditor.bank to this account.
+    // A ten-digit personkonto is sent without a clearing number and shown with the one it is written with:
+    // the approver reads 3300-YYMMDDXXXX, the account as the customer gave it, though the signed body
+    // carries the ten digits alone. Decided before any digit is split off, so its first four are never
+    // shown as a clearing number. Only the SE transfer's creditor pattern takes such a value.
+    if (isSePersonkontoBban(value)) {
+      return `${SE_PERSONKONTO_CLEARING}-${value}`;
+    }
     const clearingLength = seClearingLength(value);
     return `${value.slice(0, clearingLength)}-${value.slice(clearingLength)}`;
   }

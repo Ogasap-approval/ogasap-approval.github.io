@@ -28,7 +28,9 @@ export const SE_EXECUTION_DATE_TIME_ZONE = "Europe/Stockholm";
 
 const NORDEA_SE_BIC = "NDEASESS";
 const DATE_STRING = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/u;
-const SE_BBAN_DIGITS = /^[0-9]{11,15}$/u;
+// Eleven to fifteen digits are a BBAN with its clearing number; exactly ten are a Nordea personkonto sent
+// without one (isSePersonkontoBban in envelopes.js), which only the SE transfer's creditor may be.
+const SE_BBAN_DIGITS = /^[0-9]{10,15}$/u;
 const MS_PER_DAY = 86400000;
 
 const STOCKHOLM_PARTS = new Intl.DateTimeFormat("en-US", {
@@ -165,7 +167,8 @@ export function stockholmDateAndSeconds(instant) {
 }
 
 // null (the payout needs no date) or the YYYY-MM-DD next Swedish banking day to put in
-// requested_execution_date. `creditorBban` is the creditor account's BBAN digits.
+// requested_execution_date. `creditorBban` is the creditor account's BBAN digits as the body sends them:
+// a clearing number and an account, or the ten digits of a Nordea personkonto.
 export function seExecutionDateFor({ instant, creditorBban } = {}) {
   if (typeof creditorBban !== "string" || !SE_BBAN_DIGITS.test(creditorBban)) {
     throw new RangeError("creditorBban must be a Swedish BBAN of digits");
@@ -177,7 +180,9 @@ export function seExecutionDateFor({ instant, creditorBban } = {}) {
       return null;
     }
     // Nordea's own cut-off for a transfer between its accounts is 24:00, so a Nordea-held creditor on a
-    // banking day needs no date at any time.
+    // banking day needs no date at any time. seBicForBban reads a ten-digit personkonto as Nordea's by its
+    // length, never by its first four digits, so one that starts like another bank's clearing number
+    // (8501...) is still Nordea-held here.
     if (seBicForBban(creditorBban) === NORDEA_SE_BIC) {
       return null;
     }
